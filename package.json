@@ -10,7 +10,6 @@
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.0",
-    "@marsidev/react-turnstile": "^1.6.1",
     "@supabase/supabase-js": "^2.45.4",
     "clsx": "^2.1.1",
     "lucide-react": "^0.453.0",

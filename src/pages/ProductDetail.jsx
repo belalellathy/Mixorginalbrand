@@ -3,7 +3,6 @@ import { useParams, Link } from 'react-router-dom';
 import { ChevronRight, Star, StarHalf, Plus, Minus, Check, ShoppingBag, ShieldCheck, Truck, RefreshCw } from 'lucide-react';
 import { fetchProductById, fetchProductImages, fetchRelatedProducts, fetchProductReviews, submitReview } from '../lib/supabase';
 import { getErrorMessage } from '../lib/utils';
-import { Turnstile } from '@marsidev/react-turnstile';
 import { useCartStore } from '../store/cartStore';
 import { formatEGP } from '../lib/format';
 import ProductCard from '../components/ProductCard';
@@ -46,16 +45,6 @@ export default function ProductDetail() {
   const [formError, setFormError] = useState('');
   const [reviewError, setReviewError] = useState('');
   const [stockMessage, setStockMessage] = useState('');
-  const [turnstileToken, setTurnstileToken] = useState(null);
-  const [turnstileKey, setTurnstileKey] = useState(0);
-
-  const skipCaptcha = import.meta.env.VITE_DISABLE_CAPTCHA === 'true';
-
-  // Dev-only bypass: Safari blocks the Turnstile iframe on localhost,
-  // so auto-set a bypass token and skip rendering the widget.
-  useEffect(() => {
-    if (skipCaptcha) setTurnstileToken('dev-bypass');
-  }, [skipCaptcha]);
 
   const addToCart = useCartStore((state) => state.addToCart);
   const cartItems = useCartStore((state) => state.cartItems);
@@ -162,11 +151,6 @@ export default function ProductDetail() {
       setFormError('Please select a star rating (1-5).');
       return;
     }
-    if (!turnstileToken) {
-      setFormError('Please complete the CAPTCHA verification.');
-      return;
-    }
-
     try {
       setSubmitting(true);
       const newReview = await submitReview({
@@ -174,7 +158,6 @@ export default function ProductDetail() {
         full_name: fullName.trim(),
         rating: selectedRating,
         comment: comment.trim() || null,
-        turnstile_token: turnstileToken,
       });
 
       // Add new review to list without re-fetching
@@ -190,10 +173,6 @@ export default function ProductDetail() {
       setFullName('');
       setSelectedRating(0);
       setComment('');
-      // In dev-bypass mode restore the bypass token so the form stays submittable;
-      // in production clear it and remount the widget for a fresh challenge.
-      setTurnstileToken(skipCaptcha ? 'dev-bypass' : null);
-      setTurnstileKey((k) => k + 1);
       setSubmitSuccess('Thank you! Your review has been submitted.');
     } catch (err) {
       console.error('Error submitting review:', err);
@@ -605,21 +584,9 @@ export default function ProductDetail() {
                   <p className="text-xs text-emerald-600 font-medium">{submitSuccess}</p>
                 )}
 
-                {!skipCaptcha && (
-                  <div className="flex justify-center">
-                    <Turnstile
-                      key={turnstileKey}
-                      siteKey={import.meta.env.VITE_TURNSTILE_SITE_KEY}
-                      onSuccess={(token) => setTurnstileToken(token)}
-                      onExpire={() => setTurnstileToken(null)}
-                      onError={() => setTurnstileToken(null)}
-                    />
-                  </div>
-                )}
-
                 <button
                   type="submit"
-                  disabled={!turnstileToken || submitting}
+                  disabled={submitting}
                   className="w-full rounded-[8px] py-3 px-6 bg-[#1A1A1A] text-white text-xs font-semibold tracking-wider uppercase hover:bg-neutral-800 active:scale-[0.99] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {submitting ? 'Submitting...' : 'Submit Review'}

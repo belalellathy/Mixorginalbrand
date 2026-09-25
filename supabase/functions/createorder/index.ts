@@ -6,14 +6,6 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-function isLocalRequest(req: Request): boolean {
-  const origin = req.headers.get("origin") ?? "";
-  const referer = req.headers.get("referer") ?? "";
-  return [origin, referer].some((v) =>
-    v.includes("localhost") || v.includes("127.0.0.1")
-  );
-}
-
 function errorResponse(message: string, status = 400) {
   return new Response(JSON.stringify({ error: message }), {
     status,
@@ -27,30 +19,7 @@ serve(async (req: Request) => {
   }
 
   try {
-    const { items, contactInfo, receipt_path, turnstile_token } = await req.json();
-
-    // 1. CAPTCHA VERIFICATION
-    if (turnstile_token === "dev-bypass") {
-      if (!isLocalRequest(req)) {
-        return errorResponse("CAPTCHA verification failed");
-      }
-    } else {
-      const verifyRes = await fetch(
-        "https://challenges.cloudflare.com/turnstile/v0/siteverify",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            secret: Deno.env.get("TURNSTILE_SECRET_KEY"),
-            response: turnstile_token,
-          }),
-        }
-      );
-      const verifyData = await verifyRes.json();
-      if (!verifyData.success) {
-        return errorResponse("CAPTCHA verification failed");
-      }
-    }
+    const { items, contactInfo, receipt_path } = await req.json();
 
     // 2. INPUT VALIDATION
     if (!Array.isArray(items) || items.length === 0) {

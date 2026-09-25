@@ -174,7 +174,7 @@ export async function fetchRelatedProducts(categoryId, currentProductId, limit =
  * Pricing is computed fully server-side — the client never sends
  * unit_price or total_price.
  */
-export async function createOrder({ items, contactInfo, receipt_path, turnstile_token }) {
+export async function createOrder({ items, contactInfo, receipt_path }) {
   const response = await fetch(
     `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/createorder`,
     {
@@ -183,7 +183,7 @@ export async function createOrder({ items, contactInfo, receipt_path, turnstile_
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
       },
-      body: JSON.stringify({ items, contactInfo, receipt_path, turnstile_token }),
+      body: JSON.stringify({ items, contactInfo, receipt_path }),
     }
   );
 
@@ -240,15 +240,12 @@ export async function submitReview({
   fullName,
   rating,
   comment,
-  turnstile_token,
-  turnstileToken,
 }) {
   const payload = {
     product_id: product_id ?? productId,
     name: name ?? full_name ?? fullName,
     rating,
     comment,
-    turnstile_token: turnstile_token ?? turnstileToken,
   };
 
   const response = await fetch(

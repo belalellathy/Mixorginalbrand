@@ -4,7 +4,6 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { Check, Upload, ArrowRight, ArrowLeft, ShieldCheck, Loader2, AlertCircle, Image as ImageIcon } from 'lucide-react';
-import { Turnstile } from '@marsidev/react-turnstile';
 import { useCartStore } from '../store/cartStore';
 import { uploadPaymentScreenshot, createOrder, fetchPaymentSettings } from '../lib/supabase';
 import { getErrorMessage } from '../lib/utils';
@@ -25,15 +24,6 @@ export default function Checkout() {
   const [uploadError, setUploadError] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [paymentSettings, setPaymentSettings] = useState(null);
-  const [turnstileToken, setTurnstileToken] = useState(null);
-
-  const skipCaptcha = import.meta.env.VITE_DISABLE_CAPTCHA === 'true';
-
-  // Dev-only bypass: Safari blocks the Turnstile iframe on localhost,
-  // so auto-set a bypass token and skip rendering the widget.
-  useEffect(() => {
-    if (skipCaptcha) setTurnstileToken('dev-bypass');
-  }, [skipCaptcha]);
 
   useEffect(() => {
     fetchPaymentSettings()
@@ -115,11 +105,6 @@ export default function Checkout() {
       return;
     }
 
-    if (!turnstileToken) {
-      setUploadError('Please complete the CAPTCHA verification.');
-      return;
-    }
-
     setIsSubmitting(true);
     setUploadError(null);
 
@@ -154,7 +139,6 @@ export default function Checkout() {
           address: formData.address,
         },
         receipt_path: path,
-        turnstile_token: turnstileToken,
       });
 
       // 3. Clear cart and redirect — build confirmation from local state, no DB re-fetch
@@ -543,18 +527,6 @@ export default function Checkout() {
               )}
             </div>
 
-            {/* Turnstile CAPTCHA (skipped on localhost via VITE_DISABLE_CAPTCHA) */}
-            {!skipCaptcha && (
-              <div className="flex justify-center">
-                <Turnstile
-                  siteKey={import.meta.env.VITE_TURNSTILE_SITE_KEY}
-                  onSuccess={(token) => setTurnstileToken(token)}
-                  onExpire={() => setTurnstileToken(null)}
-                  onError={() => setTurnstileToken(null)}
-                />
-              </div>
-            )}
-
             {/* Navigation buttons */}
             <div className="pt-4 flex justify-between items-center border-t border-neutral-100">
               <button
@@ -569,7 +541,7 @@ export default function Checkout() {
 
               <button
                 type="button"
-                disabled={!turnstileToken || isSubmitting}
+                disabled={isSubmitting}
                 onClick={onFinalSubmit}
                 className="bg-[#1A1A1A] hover:bg-neutral-800 text-white px-8 py-4 rounded-[8px] text-xs font-semibold uppercase tracking-widest flex items-center space-x-2 transition-all shadow-md active:scale-[0.99] disabled:opacity-50 disabled:cursor-not-allowed"
               >

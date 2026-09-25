@@ -6,21 +6,9 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-async function verifyTurnstile(token: string): Promise<boolean> {
-  if (!token) return false;
-  const verifyRes = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      secret: Deno.env.get("TURNSTILE_SECRET_KEY"),
-      response: token,
-    }),
-  });
-  const verifyData = await verifyRes.json();
-  return !!verifyData.success;
-}
+const MAX_REVIEWS_PER_IP_PER_DAY = 3;
+const WINDOW_HOURS = 24;
 
-// Dev-bypass is accepted ONLY for requests originating from localhost.
 function isLocalRequest(req: Request): boolean {
   const origin = req.headers.get("origin") ?? "";
   const referer = req.headers.get("referer") ?? "";
@@ -29,11 +17,52 @@ function isLocalRequest(req: Request): boolean {
   );
 }
 
-function captchaFailed() {
-  return new Response(JSON.stringify({ error: "CAPTCHA verification failed" }), {
-    status: 400,
+function respond(body: object, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
+}
+
+async function checkAndIncrementRateLimit(
+  supabase: ReturnType<typeof createClient>,
+  ip: string
+): Promise<boolean> {
+  await supabase.rpc("cleanup_rate_limits").catch(() => {});
+
+  const { data: existing } = await supabase
+    .from("review_rate_limits")
+    .select("count, window_start")
+    .eq("ip", ip)
+    .maybeSingle();
+
+  if (!existing) {
+    await supabase.from("review_rate_limits").insert({ ip, count: 1 });
+    return true;
+  }
+
+  const windowStart = new Date(existing.window_start);
+  const now = new Date();
+  const hoursDiff = (now.getTime() - windowStart.getTime()) / (1000 * 60 * 60);
+
+  if (hoursDiff >= WINDOW_HOURS) {
+    await supabase
+      .from("review_rate_limits")
+      .update({ count: 1, window_start: now.toISOString() })
+      .eq("ip", ip);
+    return true;
+  }
+
+  if (existing.count >= MAX_REVIEWS_PER_IP_PER_DAY) {
+    return false;
+  }
+
+  await supabase
+    .from("review_rate_limits")
+    .update({ count: existing.count + 1 })
+    .eq("ip", ip);
+
+  return true;
 }
 
 serve(async (req: Request) => {
@@ -42,52 +71,68 @@ serve(async (req: Request) => {
   }
 
   try {
-    const { product_id, name, rating, comment, turnstile_token } = await req.json();
+    const { product_id, name, rating, comment } = await req.json();
 
-    // Dev bypass (localhost only, enabled via VITE_DISABLE_CAPTCHA=true locally).
-    // On Vercel/production the env var is unset, the client never sends
-    // 'dev-bypass', and every token is verified with Cloudflare.
-    if (turnstile_token === "dev-bypass") {
-      if (!isLocalRequest(req)) return captchaFailed();
-    } else {
-      // Verify Turnstile token
-      const isHuman = await verifyTurnstile(turnstile_token);
-      if (!isHuman) {
-        return captchaFailed();
-      }
-    }
-
-    // --- Server-side validation ---
+    // Server-side input validation
     if (!product_id) {
-      return new Response(JSON.stringify({ error: "product_id is required" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return respond({ error: "product_id is required" }, 400);
     }
     const cleanName = (name ?? "").toString().trim().slice(0, 80);
     if (!cleanName) {
-      return new Response(JSON.stringify({ error: "Name is required" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return respond({ error: "Name is required" }, 400);
     }
     const ratingInt = Number(rating);
     if (!Number.isInteger(ratingInt) || ratingInt < 1 || ratingInt > 5) {
-      return new Response(JSON.stringify({ error: "Rating must be an integer 1-5" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return respond({ error: "Rating must be an integer 1-5" }, 400);
     }
-    const cleanComment = comment == null || comment === ""
-      ? null
-      : comment.toString().trim().slice(0, 1000) || null;
+    const cleanComment =
+      comment == null || comment === ""
+        ? null
+        : comment.toString().trim().slice(0, 1000) || null;
 
-    // --- Insert with service role key (bypasses anon RLS) ---
+    if (cleanComment && cleanComment === cleanComment.toUpperCase() && cleanComment.length > 10) {
+      return respond({ error: "Please write your review in normal text." }, 400);
+    }
+
+    // IP rate limiting
+    const ip =
+      req.headers.get("x-forwarded-for")?.split(",")[0].trim() ||
+      req.headers.get("x-real-ip") ||
+      "unknown";
+
     const supabase = createClient(
       Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
     );
 
+    if (!isLocalRequest(req) && ip !== "unknown") {
+      const allowed = await checkAndIncrementRateLimit(supabase, ip);
+      if (!allowed) {
+        return respond(
+          { error: `Too many reviews. You can submit up to ${MAX_REVIEWS_PER_IP_PER_DAY} reviews per day.` },
+          429
+        );
+      }
+    }
+
+    // One review per product per IP per window
+    const windowStart = new Date(Date.now() - WINDOW_HOURS * 60 * 60 * 1000).toISOString();
+    const { data: existingReview } = await supabase
+      .from("reviews")
+      .select("id")
+      .eq("product_id", product_id)
+      .eq("reviewer_ip", ip)
+      .gte("created_at", windowStart)
+      .maybeSingle();
+
+    if (existingReview && !isLocalRequest(req)) {
+      return respond(
+        { error: "You have already reviewed this product recently." },
+        429
+      );
+    }
+
+    // Insert review
     const { data, error } = await supabase
       .from("reviews")
       .insert([{
@@ -95,21 +140,20 @@ serve(async (req: Request) => {
         full_name: cleanName,
         rating: ratingInt,
         comment: cleanComment,
+        reviewer_ip: ip,
       }])
-      .select()
+      .select("id, product_id, full_name, rating, comment, created_at")
       .single();
 
     if (error) throw error;
 
-    return new Response(JSON.stringify(data), {
-      status: 200,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return respond(data, 200);
+
   } catch (err) {
     console.error("submit-review failed:", err);
-    return new Response(JSON.stringify({ error: (err as Error).message || "Failed to submit review" }), {
-      status: 500,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return respond(
+      { error: "Failed to submit review. Please try again." },
+      500
+    );
   }
 });
