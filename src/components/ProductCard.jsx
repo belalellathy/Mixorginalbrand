@@ -37,7 +37,7 @@ export default function ProductCard({ product, accentColor, avg_rating, review_c
 
     const existing = cartItems.find((item) => item.product.id === product.id);
     const currentInCart = existing?.quantity || 0;
-    const canAdd = product.stock - currentInCart;
+    const canAdd = product.stock == null || product.stock > 0;
 
     if (canAdd <= 0) {
       setStockMessage('Maximum available quantity already in cart');

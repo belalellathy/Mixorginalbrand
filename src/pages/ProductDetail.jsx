@@ -215,7 +215,10 @@ export default function ProductDetail() {
       return;
     }
 
-    addToCart(product, Math.min(quantity, canAdd));
+    const quantityToAdd = typeof product.stock === 'number'
+      ? Math.min(quantity, product.stock - currentInCart)
+      : quantity
+    addToCart(product, quantityToAdd);
 
     if (quantity > canAdd) {
       setStockMessage(`Only ${canAdd} unit(s) added — maximum stock reached`);
@@ -228,7 +231,7 @@ export default function ProductDetail() {
   };
 
   const handleIncrement = () => {
-    if (!product || quantity >= product.stock) return;
+    if (!product || (typeof product.stock === 'number' && quantity >= product.stock)) return;
     setQuantity((q) => q + 1);
   };
   const handleDecrement = () => setQuantity((prev) => (prev > 1 ? prev - 1 : 1));
@@ -394,13 +397,14 @@ export default function ProductDetail() {
                     <button
                       onClick={handleIncrement}
                       type="button"
-                      className="p-2.5 text-neutral-600 hover:text-neutral-900 transition-colors"
+                      disabled={typeof product.stock === 'number' && quantity >= product.stock}
+                      className="p-2.5 text-neutral-600 hover:text-neutral-900 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       <Plus className="w-3.5 h-3.5" />
                     </button>
                   </div>
                   <span className="text-xs text-emerald-600 font-medium">
-                    {`In Stock (${product.stock} available)`}
+                    {product.stock == null ? 'In Stock' : `In Stock (${product.stock} available)`}
                   </span>
                 </div>
               )}
