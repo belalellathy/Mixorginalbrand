@@ -28,7 +28,10 @@ async function checkAndIncrementRateLimit(
   supabase: ReturnType<typeof createClient>,
   ip: string
 ): Promise<boolean> {
-  await supabase.rpc("cleanup_rate_limits").catch(() => {});
+  const { error: cleanupError } = await supabase.rpc("cleanup_rate_limits");
+  if (cleanupError) {
+    console.error("Rate-limit cleanup failed:", cleanupError);
+  }
 
   const { data: existing } = await supabase
     .from("review_rate_limits")
