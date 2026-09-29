@@ -109,6 +109,8 @@ export default function Checkout() {
 
   // Final Order Submission
   const onFinalSubmit = async (formData) => {
+    if (isSubmitting) return;
+
     if (!paymentFile) {
       setUploadError('Please upload your payment screenshot to proceed.');
       return;
