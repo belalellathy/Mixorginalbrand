@@ -6,42 +6,31 @@ const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 /**
- * Upload payment screenshot to Supabase storage
+ * Upload payment screenshot via the `upload-receipt` Edge Function.
  */
 export async function uploadPaymentScreenshot(file) {
   if (!file) throw new Error('No file provided');
 
-  // Extension allowlist
-  const allowedExtensions = ['jpg', 'jpeg', 'png', 'webp'];
-  const nameParts = file.name.split('.');
-  const ext = nameParts.pop().toLowerCase();
+  const formData = new FormData();
+  formData.append('file', file);
 
-  if (nameParts.length < 1 || !allowedExtensions.includes(ext)) {
-    throw new Error('Invalid file type. Please upload a JPG, PNG, or WebP image.');
+  const response = await fetch(
+    `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/upload-receipt`,
+    {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+      },
+      body: formData,
+    }
+  );
+
+  const result = await response.json();
+  if (!response.ok) {
+    throw new Error(result.error || 'Failed to upload file. Please try again.');
   }
 
-  // Size check (5MB max)
-  if (file.size > 5 * 1024 * 1024) {
-    throw new Error('File too large. Maximum size is 5MB.');
-  }
-
-  const fileName = `${Date.now()}_${crypto.randomUUID()}.${ext}`;
-  const filePath = `receipts/${fileName}`;
-
-  const { data, error } = await supabase.storage
-    .from('payment-screenshots')
-    .upload(filePath, file, {
-      cacheControl: '3600',
-      upsert: false,
-    });
-
-  if (error) throw error;
-  const { data: signedUrlData, error: signedUrlError } = await supabase.storage
-    .from('payment-screenshots')
-    .createSignedUrl(data.path, 3600);
-
-  if (signedUrlError) throw signedUrlError;
-  return { path: data.path, signedUrl: signedUrlData.signedUrl };
+  return { path: result.path };
 }
 
 /**
