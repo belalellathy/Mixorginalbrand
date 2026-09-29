@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Heart, Star, StarHalf, Plus } from 'lucide-react';
+import { Star, StarHalf, Plus } from 'lucide-react';
 import { useCartStore } from '../store/cartStore';
 import { formatEGP } from '../lib/format';
 import { getCategoryBySlug } from '../config/categories';
@@ -20,7 +20,6 @@ function accentForCategoryId(categoryId) {
 }
 
 export default function ProductCard({ product, accentColor, avg_rating, review_count }) {
-  const [isWishlisted, setIsWishlisted] = useState(false);
   const [isAdded, setIsAdded] = useState(false);
   const [stockMessage, setStockMessage] = useState('');
   const addToCart = useCartStore((state) => state.addToCart);
@@ -53,12 +52,6 @@ export default function ProductCard({ product, accentColor, avg_rating, review_c
     }
     setIsAdded(true);
     setTimeout(() => setIsAdded(false), 1200);
-  };
-
-  const handleWishlistToggle = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsWishlisted(!isWishlisted);
   };
 
   // Ratings come with the product from products_with_ratings — no extra fetch.
@@ -103,20 +96,6 @@ export default function ProductCard({ product, accentColor, avg_rating, review_c
             </span>
           )}
         </div>
-
-        {/* Wishlist Heart Icon (UI only toggle) */}
-        <button
-          onClick={handleWishlistToggle}
-          type="button"
-          aria-label="Save to wishlist"
-          className="absolute top-2.5 right-2.5 w-8 h-8 rounded-full bg-white/90 hover:bg-white flex items-center justify-center text-neutral-600 hover:text-red-500 shadow-sm transition-transform active:scale-90 focus:outline-none z-10"
-        >
-          <Heart
-            className={`w-4 h-4 transition-colors ${
-              isWishlisted ? 'fill-red-500 text-red-500' : 'text-neutral-600'
-            }`}
-          />
-        </button>
       </div>
 
       {/* Product Information */}

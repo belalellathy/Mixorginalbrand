@@ -3,7 +3,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Check, Upload, ArrowRight, ArrowLeft, ShieldCheck, Loader2, AlertCircle, Image as ImageIcon } from 'lucide-react';
+import { Check, Upload, ArrowRight, ArrowLeft, ShieldCheck, Loader2, AlertCircle } from 'lucide-react';
 import { useCartStore } from '../store/cartStore';
 import { uploadPaymentScreenshot, createOrder, fetchPaymentSettings } from '../lib/supabase';
 import { getErrorMessage } from '../lib/utils';
@@ -38,7 +38,6 @@ export default function Checkout() {
     register,
     handleSubmit,
     trigger,
-    getValues,
     formState: { errors },
   } = useForm({
     resolver: zodResolver(checkoutSchema),
@@ -98,8 +97,20 @@ export default function Checkout() {
     reader.readAsDataURL(file);
   };
 
+  // Handle validation errors on final submit by navigating to the step with errors
+  const onInvalid = (fieldErrors) => {
+    if (fieldErrors.full_name || fieldErrors.email || fieldErrors.phone) {
+      setCurrentStep(1);
+    } else if (fieldErrors.address) {
+      setCurrentStep(2);
+    }
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
   // Final Order Submission
-  const onFinalSubmit = async () => {
+  const onFinalSubmit = async (formData) => {
+    if (isSubmitting) return;
+
     if (!paymentFile) {
       setUploadError('Please upload your payment screenshot to proceed.');
       return;
@@ -121,7 +132,6 @@ export default function Checkout() {
       }
 
       // 2. Create order via Edge Function (pricing computed server-side)
-      const formData = getValues();
       const contactInfo = {
         full_name: formData.full_name,
         email: formData.email,
@@ -542,7 +552,7 @@ export default function Checkout() {
               <button
                 type="button"
                 disabled={isSubmitting}
-                onClick={onFinalSubmit}
+                onClick={handleSubmit(onFinalSubmit, onInvalid)}
                 className="bg-[#1A1A1A] hover:bg-neutral-800 text-white px-8 py-4 rounded-[8px] text-xs font-semibold uppercase tracking-widest flex items-center space-x-2 transition-all shadow-md active:scale-[0.99] disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {isSubmitting ? (
