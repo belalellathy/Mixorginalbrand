@@ -136,7 +136,12 @@ export default function ProductDetail() {
     setSubmitSuccess('');
 
     const cooldownKey = `review_${product?.id ?? id}`;
-    const lastReview = localStorage.getItem(cooldownKey);
+    let lastReview = null;
+    try {
+      lastReview = localStorage.getItem(cooldownKey);
+    } catch {
+      // Silently treat storage read failure as no cooldown recorded
+    }
 
     if (lastReview && Date.now() - Number(lastReview) < 24 * 60 * 60 * 1000) {
       setReviewError('You can only submit one review per product per day.');
@@ -168,7 +173,11 @@ export default function ProductDetail() {
       setReviewCount(newCount);
       setAvgRating(newAvg);
 
-      localStorage.setItem(cooldownKey, Date.now().toString());
+      try {
+        localStorage.setItem(cooldownKey, Date.now().toString());
+      } catch {
+        // Silently continue if storage write fails
+      }
 
       setFullName('');
       setSelectedRating(0);

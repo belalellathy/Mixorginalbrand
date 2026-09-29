@@ -1,5 +1,29 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { persist, createJSONStorage } from 'zustand/middleware';
+
+const safeStorage = {
+  getItem: (name) => {
+    try {
+      return localStorage.getItem(name);
+    } catch {
+      return null;
+    }
+  },
+  setItem: (name, value) => {
+    try {
+      localStorage.setItem(name, value);
+    } catch {
+      // Silently ignore write failures
+    }
+  },
+  removeItem: (name) => {
+    try {
+      localStorage.removeItem(name);
+    } catch {
+      // Silently ignore remove failures
+    }
+  },
+};
 
 export const useCartStore = create(
   persist(
@@ -79,6 +103,7 @@ export const useCartStore = create(
     }),
     {
       name: 'leclat-beauty-cart',
+      storage: createJSONStorage(() => safeStorage),
     }
   )
 );

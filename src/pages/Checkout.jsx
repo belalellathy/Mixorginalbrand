@@ -155,7 +155,7 @@ export default function Checkout() {
       clearCart();
       navigate('/order-confirmation', {
         state: {
-          order: { id, total_price, items: cartItems },
+          order: { id, total_price, items: cartItems, address: formData.address },
           contactInfo,
           receiptUrl: signedUrl,
         },
