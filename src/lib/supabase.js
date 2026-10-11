@@ -7,30 +7,60 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 /**
  * Upload payment screenshot via the `upload-receipt` Edge Function.
+ * Client type/size checks below are UX-only; the server sniffs magic bytes,
+ * enforces 5 MB, and generates the receipt path.
  */
+export const ALLOWED_RECEIPT_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+
+export const MAX_RECEIPT_SIZE_BYTES = 5 * 1024 * 1024;
+
 export async function uploadPaymentScreenshot(file) {
   if (!file) throw new Error('No file provided');
+
+  if (!ALLOWED_RECEIPT_TYPES.includes(file.type)) {
+    throw new Error('Unsupported image type. Use JPG, PNG or WEBP.');
+  }
+
+  if (file.size > MAX_RECEIPT_SIZE_BYTES) {
+    throw new Error('File too large. Maximum size is 5MB.');
+  }
 
   const formData = new FormData();
   formData.append('file', file);
 
-  const response = await fetch(
-    `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/upload-receipt`,
-    {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-      },
-      body: formData,
-    }
-  );
-
-  const result = await response.json();
-  if (!response.ok) {
-    throw new Error(result.error || 'Failed to upload file. Please try again.');
+  let response;
+  try {
+    response = await fetch(
+      `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/upload-receipt`,
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+          'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY,
+        },
+        body: formData,
+      }
+    );
+  } catch {
+    throw new Error('Network error. Please try again.');
   }
 
-  return { path: result.path };
+  let body = {};
+  try {
+    body = await response.json();
+  } catch {
+    body = {};
+  }
+
+  if (!response.ok) {
+    throw new Error(body.error || 'Upload failed');
+  }
+
+  if (!body.path || typeof body.path !== 'string') {
+    throw new Error('Upload failed');
+  }
+
+  return { path: body.path };
 }
 
 /**
@@ -164,21 +194,32 @@ export async function fetchRelatedProducts(categoryId, currentProductId, limit =
  * unit_price or total_price.
  */
 export async function createOrder({ items, contactInfo, receipt_path }) {
-  const response = await fetch(
-    `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/createorder`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-      },
-      body: JSON.stringify({ items, contactInfo, receipt_path }),
-    }
-  );
+  try {
+    const { data, error } = await supabase.functions.invoke('createorder', {
+      body: { items, contactInfo, receipt_path },
+    });
 
-  const result = await response.json();
-  if (!response.ok) throw new Error(result.error || 'Order failed');
-  return result; // { id, total_price }
+    if (error) {
+      if (error.context instanceof Response) {
+        let message = 'Failed to place order';
+        try {
+          const body = await error.context.json();
+          if (body?.error) message = body.error;
+        } catch {
+          // Keep default message when the error body is not JSON.
+        }
+        throw new Error(message);
+      }
+      throw new Error('Network error. Please try again.');
+    }
+
+    if (!data?.id) throw new Error('Failed to place order');
+    // receipt_signed_url is absent on the old function; default to null.
+    return { id: data.id, total_price: data.total_price, receipt_signed_url: data.receipt_signed_url ?? null };
+  } catch (err) {
+    if (err instanceof Error) throw err;
+    throw new Error('Network error. Please try again.');
+  }
 }
 
 /**
