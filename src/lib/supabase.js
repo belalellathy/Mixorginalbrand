@@ -67,6 +67,33 @@ export async function uploadPaymentScreenshot(file) {
 }
 
 /**
+ * Fetch active shipping rates (governorates) for the checkout drop-down.
+ * RLS exposes only is_active = true rows to anon; the NULL-price filter
+ * below is defense-in-depth. Prices are normalized to Number — the client
+ * only displays them and sends back the code; the server prices the order.
+ */
+export async function fetchShippingRates() {
+  try {
+    const { data, error } = await supabase
+      .from('shipping_rates')
+      .select('code, name_en, price, sort_order')
+      .eq('is_active', true)
+      .not('price', 'is', null)
+      .order('sort_order');
+
+    if (error) throw error;
+
+    return (data || []).map((row) => ({
+      code: row.code,
+      name_en: row.name_en,
+      price: Number(row.price),
+    }));
+  } catch {
+    throw new Error('Failed to load delivery options. Please try again.');
+  }
+}
+
+/**
  * Fetch store payment settings (bank/IBAN/Instapay) as a key->value map
  */
 export async function fetchPaymentSettings() {
@@ -196,21 +223,33 @@ export async function fetchRelatedProducts(categoryId, currentProductId, limit =
  * Pricing is computed fully server-side — the client never sends
  * unit_price or total_price.
  */
-export async function createOrder({ items, contactInfo, receipt_path }) {
+export async function createOrder({ items, contactInfo, receipt_path, shipping_code, expected_total }) {
   try {
     const { data, error } = await supabase.functions.invoke('createorder', {
-      body: { items, contactInfo, receipt_path },
+      body: { items, contactInfo, receipt_path, shipping_code, expected_total },
     });
 
     if (error) {
       if (error.context instanceof Response) {
         const status = error.context.status;
         let message = 'Failed to place order';
+        let code = null;
+        let serverTotal = null;
         try {
           const body = await error.context.json();
           if (body?.error) message = body.error;
+          if (body?.code) code = body.code;
+          if (typeof body?.total_price === 'number') serverTotal = body.total_price;
         } catch {
           // Keep default message when the error body is not JSON.
+        }
+        // 409 TOTAL_CHANGED carries the server total so the caller can show
+        // it and resubmit with explicit user acceptance — never auto-retry.
+        if (status === 409 && code === 'TOTAL_CHANGED') {
+          const totalErr = new Error(message);
+          totalErr.code = 'TOTAL_CHANGED';
+          totalErr.total_price = serverTotal;
+          throw totalErr;
         }
         if (status === 429 && message === 'Failed to place order') {
           message = 'Too many orders. Please wait a few minutes and try again.';
@@ -222,7 +261,8 @@ export async function createOrder({ items, contactInfo, receipt_path }) {
 
     if (!data?.id) throw new Error('Failed to place order');
     // receipt_signed_url is absent on the old function; default to null.
-    return { id: data.id, total_price: data.total_price, receipt_signed_url: data.receipt_signed_url ?? null };
+    // shipping_* come from the server response, never from client state.
+    return { id: data.id, total_price: data.total_price, shipping_price: data.shipping_price ?? null, shipping_name: data.shipping_name ?? null, receipt_signed_url: data.receipt_signed_url ?? null };
   } catch (err) {
     if (err instanceof Error) throw err;
     throw new Error('Network error. Please try again.');
