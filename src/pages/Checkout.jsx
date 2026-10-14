@@ -6,7 +6,6 @@ import * as z from 'zod';
 import { Check, Upload, ArrowRight, ArrowLeft, ShieldCheck, Loader2, AlertCircle } from 'lucide-react';
 import { useCartStore } from '../store/cartStore';
 import { uploadPaymentScreenshot, createOrder, fetchPaymentSettings, ALLOWED_RECEIPT_TYPES, MAX_RECEIPT_SIZE_BYTES } from '../lib/supabase';
-import { getErrorMessage } from '../lib/utils';
 import { formatEGP } from '../lib/format';
 
 // Zod validation schema for Checkout
@@ -122,7 +121,7 @@ export default function Checkout() {
         uploaded = await uploadPaymentScreenshot(paymentFile);
       } catch (uploadErr) {
         console.error('Payment screenshot upload failed');
-        setUploadError(getErrorMessage(uploadErr, 'Failed to upload file. Please try again.'));
+        setUploadError(uploadErr?.message || 'Failed to upload file. Please try again.');
         return;
       }
 
@@ -157,7 +156,7 @@ export default function Checkout() {
       });
     } catch (err) {
       console.error('Order submission failed');
-      setUploadError(getErrorMessage(err, 'Failed to place order. Please try again.'));
+      setUploadError(err?.message || 'Failed to place order. Please try again.');
     } finally {
       setIsSubmitting(false);
     }
@@ -202,10 +201,10 @@ export default function Checkout() {
         <div className="relative z-10 flex flex-col items-center">
           <div
             className={`w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold transition-colors ${currentStep > 1
-                ? 'bg-neutral-900 text-white'
-                : currentStep === 1
-                  ? 'bg-neutral-900 text-white ring-4 ring-neutral-100'
-                  : 'bg-white border-2 border-neutral-300 text-neutral-400'
+              ? 'bg-neutral-900 text-white'
+              : currentStep === 1
+                ? 'bg-neutral-900 text-white ring-4 ring-neutral-100'
+                : 'bg-white border-2 border-neutral-300 text-neutral-400'
               }`}
           >
             {currentStep > 1 ? <Check className="w-4 h-4" /> : '1'}
@@ -219,10 +218,10 @@ export default function Checkout() {
         <div className="relative z-10 flex flex-col items-center">
           <div
             className={`w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold transition-colors ${currentStep > 2
-                ? 'bg-neutral-900 text-white'
-                : currentStep === 2
-                  ? 'bg-neutral-900 text-white ring-4 ring-neutral-100'
-                  : 'bg-white border-2 border-neutral-300 text-neutral-400'
+              ? 'bg-neutral-900 text-white'
+              : currentStep === 2
+                ? 'bg-neutral-900 text-white ring-4 ring-neutral-100'
+                : 'bg-white border-2 border-neutral-300 text-neutral-400'
               }`}
           >
             {currentStep > 2 ? <Check className="w-4 h-4" /> : '2'}
@@ -236,8 +235,8 @@ export default function Checkout() {
         <div className="relative z-10 flex flex-col items-center">
           <div
             className={`w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold transition-colors ${currentStep === 3
-                ? 'bg-neutral-900 text-white ring-4 ring-neutral-100'
-                : 'bg-white border-2 border-neutral-300 text-neutral-400'
+              ? 'bg-neutral-900 text-white ring-4 ring-neutral-100'
+              : 'bg-white border-2 border-neutral-300 text-neutral-400'
               }`}
           >
             3
