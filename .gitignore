@@ -5,3 +5,4 @@ node_modules/
 dist/
 testresults.md
 DESCRIPTION.md
+testaudit.md

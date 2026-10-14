@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { Plus } from 'lucide-react';
 import { useCartStore } from '../store/cartStore';
@@ -23,7 +23,27 @@ export default function ProductCard({ product, accentColor }) {
   const [isAdded, setIsAdded] = useState(false);
   const [stockMessage, setStockMessage] = useState('');
   const addToCart = useCartStore((state) => state.addToCart);
-  const cartItems = useCartStore((state) => state.cartItems);
+  // Narrow selector: this card re-renders only when its own cart line
+  // changes, not on every cart update for other products.
+  const currentInCart = useCartStore(
+    (state) => state.cartItems.find((item) => item.product.id === product.id)?.quantity ?? 0
+  );
+
+  // Timer handles: overlapping clicks reset (rather than stack) the
+  // message/isAdded timeouts, and unmount clears them so no set-state
+  // fires after unmount.
+  const messageTimer = useRef(null);
+  const addedTimer = useRef(null);
+  useEffect(() => () => {
+    if (messageTimer.current) clearTimeout(messageTimer.current);
+    if (addedTimer.current) clearTimeout(addedTimer.current);
+  }, []);
+
+  const flashStockMessage = (message) => {
+    setStockMessage(message);
+    if (messageTimer.current) clearTimeout(messageTimer.current);
+    messageTimer.current = setTimeout(() => setStockMessage(''), 3000);
+  };
 
   // Determine accent color from prop or category relation
   const categoryAccent = accentColor ||
@@ -34,24 +54,25 @@ export default function ProductCard({ product, accentColor }) {
     e.preventDefault();
     e.stopPropagation();
 
-    const existing = cartItems.find((item) => item.product.id === product.id);
-    const currentInCart = existing?.quantity || 0;
-    const canAdd = product.stock == null || product.stock > 0;
+    // Numeric guard (mirrors ProductDetail.jsx): stock minus what's
+    // already in cart. Null stock means unlimited -> Infinity, so the
+    // comparisons below stay meaningful. (The old boolean `canAdd` made
+    // `canAdd <= 0` and `canAdd === 1` dead code.)
+    const remaining = product.stock == null ? Infinity : product.stock - currentInCart;
 
-    if (canAdd <= 0) {
-      setStockMessage('Maximum available quantity already in cart');
-      setTimeout(() => setStockMessage(''), 3000);
+    if (remaining <= 0) {
+      flashStockMessage('Maximum available quantity already in cart');
       return;
     }
 
     addToCart(product, 1);
 
-    if (canAdd === 1) {
-      setStockMessage('Last unit added — maximum stock reached');
-      setTimeout(() => setStockMessage(''), 3000);
+    if (remaining === 1) {
+      flashStockMessage('Last unit added — maximum stock reached');
     }
     setIsAdded(true);
-    setTimeout(() => setIsAdded(false), 1200);
+    if (addedTimer.current) clearTimeout(addedTimer.current);
+    addedTimer.current = setTimeout(() => setIsAdded(false), 1200);
   };
 
   return (
