@@ -1,298 +1,239 @@
-# Mix Originals — Project Description, Security Audit & Bug Report
+# Mix Originals — Security & Bug Audit (fresh, evidence-based)
+
+> READ-ONLY audit. Only this file was written. Every finding cites code read in this session.
+> The previous DESCRIPTION.md was treated as untrusted and was opened only after the audit (see §9).
+> Audit date (UTC): 2026-10-12. Scope: entire repo except `node_modules/` and `dist/`.
 
 ## 1. Project Overview
 
-**What the project does:**
-Mix Originals (also branded “L'ÉCLAT Haute Beauté” / “Maison” in UI copy) is a luxury beauty e-commerce single-page application. It lets visitors browse perfume / skincare / makeup categories, search products, view product details with image galleries and customer reviews, add items to a persistent shopping bag, and check out via a 3-step manual bank-transfer flow (contact → address + review → upload payment screenshot). After placing an order the user sees an order-confirmation screen.
+**What it is:** React 18 + Vite SPA luxury-beauty storefront ("Mix Originals", also branded "Maison" in copy). Browse categories/search/product detail + reviews, persistent cart, 3-step manual bank-transfer checkout (contact → address/review → payment-screenshot upload), order-confirmation screen. No payment gateway. No login/auth — fully anonymous.
 
-There is **no custom backend in the repo**. Reads go directly from the browser via Supabase; **order creation is delegated to a Supabase Edge Function (`createorder`)** whose server code is not versioned here, so its pricing/stock logic cannot be audited from this snapshot.
+**Actual installed versions** (from `package-lock.json`, not `package.json` ranges):
 
-**Tech stack:**
+| Package | Installed | Package | Installed |
+|---|---|---|---|
+| react / react-dom | 18.3.1 | vite | 5.4.21 |
+| react-router-dom (→ react-router) | 6.30.6 | @vitejs/plugin-react | 4.7.0 |
+| zustand | 4.5.7 | @vitejs/plugin-basic-ssl | 1.2.0 |
+| zod | 3.25.76 | tailwindcss | 3.4.19 |
+| react-hook-form | 7.88.0 | postcss / autoprefixer | 8.5.28 / 10.6.1 |
+| @hookform/resolvers | 3.10.0 | lucide-react | 0.453.0 |
+| @supabase/supabase-js | 2.109.0 | motion | 13.4.1 |
+| clsx / tailwind-merge | 2.1.1 / 3.7.0 | — | — |
 
-| Layer | Technology |
-|---|---|
-| Frontend | React 18.3.1, React Router DOM 6.26.2, Vite 5.4.8 |
-| Styling | Tailwind CSS 3.4.13, PostCSS 8.4.47, Autoprefixer 10.4.20, Google Fonts (Playfair Display + Inter), lucide-react 0.453.0 icons |
-| State | Zustand 4.5.5 + `zustand/middleware/persist` (localStorage) |
-| Forms/validation | react-hook-form 7.53.0, Zod 3.23.8, @hookform/resolvers 3.9.0 |
-| Backend / DB / Storage | Supabase (Postgres + PostgREST + Storage) via @supabase/supabase-js 2.45.4, plus Edge Function `createorder` (server code not in repo) |
-| Auth | None — anonymous access only |
-| Payments | Manual: bank / Instapay transfer + image receipt upload, no payment gateway |
-| Build/deploy | `vite build` → static `dist/`, `vercel.json` SPA rewrite (no SSR) |
-
-**High-level architecture:**
+**Architecture (text diagram):**
 
 ```
-Browser SPA (React Router)
- ├─ Zustand cartStore (localStorage `leclat-beauty-cart`)
- ├─ src/lib/supabase.js ── Supabase JS client (VITE_SUPABASE_URL + VITE_SUPABASE_ANON_KEY)
- │     ├─ PostgREST reads: categories, product_images, reviews,
- │     │                    products_with_ratings (view — ALL product reads)
- │     ├─ Direct writes: reviews (submitReview), Storage uploads
- │     └─ Storage bucket: `payment-screenshots/receipts/*` (upload + 1h signed URLs)
- ├─ Edge Function `createorder` (POST items + contactInfo + receipt_path,
- │     returns { id, total_price }) — pricing computed server-side
- ├─ src/lib/format.js ── central `formatEGP()` price formatter
- └─ src/config/categories.js ── single source for category slugs/names
+Browser SPA (BrowserRouter, src/App.jsx:27-51)
+├─ Routes: / Home, /category/:slug, /product/:id, /cart, /checkout,
+│          /order-confirmation (location.state guard), /search?q=, * → 404
+├─ Zustand cartStore, persisted to localStorage key `leclat-beauty-cart`
+│   (src/store/cartStore.js:104-108) — full product snapshots + display totals
+├─ src/lib/supabase.js — anon-key client. PostgREST READS only, plus 2 fetch()
+│   calls to Edge Functions. Client NEVER writes tables or Storage directly.
+├─ Edge Functions (in repo, audited): createorder, upload-receipt,
+│   submit-review, cloudinary-sign (unused by storefront)
+├─ Server-side (Edge, service_role): tables products/orders/order_items/reviews,
+│   RPC reserve_stock/release_stock, bucket `payment-screenshots`
+└─ Checkout PII flows: memory + navigation state only (never localStorage/URL)
 ```
 
-Product reads never touch the `products` table directly — all go through `products_with_ratings`. Client totals are display-only; the authoritative `total_price` comes from the Edge Function. RLS policies, Edge Function code, and Storage policies are not in the repo and remain unverified.
+**Trust boundaries:**
 
----
+1. Browser (untrusted) ↔ Supabase PostgREST + Edge Functions via public anon key (by design).
+2. Edge Functions (trusted, service_role) ↔ Postgres / Storage. RLS/storage policies are the real enforcement for direct table access — **absent from repo, CANNOT VERIFY**.
+3. Manual payment verification (concierge reviews `pending` orders) is the backstop against fake orders — but stock is decremented at order time, so fake orders still deny inventory.
 
-## 2. Project Structure
+## 2. Project Structure (real tree)
 
 ```
-/
-├── .env                        # REAL Supabase URL + anon JWT (should never be committed)
-├── .env.example                # Placeholder Supabase vars
-├── vercel.json                 # SPA rewrite: /(.*) → /index.html
-├── DESCRIPTION.md              # This file
-├── index.html                  # SPA shell, fonts, #root, /src/main.jsx entry
-├── package.json / package-lock.json  # Deps (React 18, Vite 5, Supabase 2, Tailwind 3)
-├── vite.config.js              # Vite + @vitejs/plugin-react, dev server :3000
-├── postcss.config.js           # tailwindcss + autoprefixer
-├── tailwind.config.js          # container, fonts, accent colors, card shadows/radii
-├── dist/                       # Committed production build output (should be gitignored)
-├── node_modules/               # Committed/installed deps (should be gitignored)
-└── src/
-    ├── main.jsx                # ReactDOM.createRoot → <App/> in StrictMode
-    ├── App.jsx                 # BrowserRouter + ScrollToTop + Navbar/Routes/Footer + catch-all 404
-    ├── index.css               # Tailwind base + .shadow-soft, .card-flat, .btn-base, .no-scrollbar
-    ├── lib/
-    │   ├── supabase.js         # Supabase client + queries (categories, products_with_ratings,
-    │   │                         search, reviews, orders via Edge Function, storage upload)
-    │   └── format.js           # Central formatEGP() currency formatter
-    ├── config/
-    │   └── categories.js       # CATEGORIES slugs/names + getCategoryBySlug()
-    ├── store/
-    │   └── cartStore.js        # Zustand persistent cart: cartItems, totalPrice, totalItems
-    ├── components/
-    │   ├── Navbar.jsx          # Logo, desktop/mobile nav, categories dropdown, debounced live
-    │   │                         search suggestions, cart badge
-    │   ├── Footer.jsx          # Brand, fake newsletter signup, category links, credit
-    │   ├── ProductCard.jsx     # Image, badges, rating stars, EGP price, add-to-cart, wishlist toggle
-    │   └── CategoryCard.jsx    # Category tile with accent_color + contrast text
-    └── pages/
-        ├── Home.jsx            # Hero, featured carousel, categories grid, bestsellers, value props
-        ├── Category.jsx        # Accent banner, sort (featured/price-low/high), product grid
-        ├── ProductDetail.jsx   # Gallery, price, qty stepper, add-to-cart, reviews list + form, related
-        ├── Search.jsx          # ?q= results, 300ms debounce + stale-guard, via searchProducts()
-        ├── Cart.jsx            # Line items, stock-capped qty stepper, order summary, checkout CTA
-        ├── Checkout.jsx        # 3-step form: contact → address/review → payment proof + upload + place order
-        ├── OrderConfirmation.jsx # Thank-you screen driven by location.state + id guard (no fetch)
-        └── NotFound.jsx        # Catch-all 404 page
+/Volumes/Apps/projects/Reactwebsite
+├── .env                    # local only, NOT tracked (anon key + Turnstile site key + VITE_DISABLE_CAPTCHA=true)
+├── .env.example            # tracked placeholder
+├── .gitignore              # .env, .env.*, dist/, node_modules/, testresults.md, DESCRIPTION.md — .env/dist NOT tracked ✔
+├── vercel.json             # security headers (partial) + SPA rewrite /(.*) → /index.html
+├── index.html              # shell, Google Fonts, #root, /src/main.jsx
+├── vite.config.js          # fail-closed CAPTCHA guard; manualChunks vendor split
+├── tailwind.config.js      # container/accent/shadow tokens; plugins: [] (no animate plugin)
+├── postcss.config.js       # tailwindcss + autoprefixer
+├── package.json            # scripts: dev/build/preview only — no lint, no tests
+├── src/
+│   ├── main.jsx            # StrictMode root
+│   ├── App.jsx             # routes (8 incl. catch-all *)
+│   ├── index.css           # .shadow-soft/.card-flat/.btn-base/.no-scrollbar utilities
+│   ├── lib/supabase.js     # all Supabase access (331 lines)
+│   ├── lib/utils.js        # cn() + getErrorMessage() (never leaks raw DB errors)
+│   ├── lib/format.js       # formatEGP()
+│   ├── config/categories.js# 4 canonical slugs
+│   ├── store/cartStore.js  # persisted cart (109 lines)
+│   ├── components/Navbar.jsx Footer.jsx ProductCard.jsx CategoryCard.jsx
+│   ├── components/ui/Skeleton.jsx (Bone, ProductCardSkeleton, PageSkeleton-unused)
+│   ├── components/ui/SlideUpText.jsx
+│   ├── pages/Home.jsx Category.jsx ProductDetail.jsx Search.jsx Cart.jsx
+│   │        Checkout.jsx (574 lines) OrderConfirmation.jsx NotFound.jsx
+│   └── data/               # EMPTY directory (dead)
+├── supabase/
+│   ├── functions/createorder/index.ts      # audited ✔ (202 lines)
+│   ├── functions/upload-receipt/index.ts   # audited ✔ (120 lines)
+│   ├── functions/submit-review/index.ts    # audited ✔ (73 lines)
+│   └── functions/cloudinary-sign/index.ts  # audited ✔ (38 lines, UNUSED by storefront)
+│   └── migrations/: 3 files, stock functions ONLY (no RLS, no storage rules, no schema)
+├── dist/                   # present on disk, NOT tracked (gitignored) ✔
+└── node_modules/           # present on disk, NOT tracked ✔
 ```
 
-No tests, no CI, no Dockerfile, no SQL migrations/seeds, no `.gitignore`, no README (before this file) were found. No git repo is initialized in this snapshot.
+**Artifact search:** `supabase/functions/**` FOUND (4 above). `*.sql`/migrations FOUND (3, stock-only). RLS `POLICIES`/storage-rules: **NOT FOUND anywhere**. `.github/` workflows: **NONE**. Tests/lint: **NONE** (`package.json:6-10`).
 
----
+**Git tracking check** (`git ls-files | grep -E "\.env|dist/|node_modules"`): only `.env.example` matched — `.env`, `dist/`, `node_modules/` are all untracked. ✔
 
-## 3. Key Features & Flows
+## 3. Data-flow & API contract table
 
-**Main features:**
-1. Category browsing (slugs/names centralized in `src/config/categories.js`) + DB-driven category pages with price sorting.
-2. Featured carousel and bestsellers, both reading `products_with_ratings` (ratings ship with every product row — no per-card fetch).
-3. Product detail with multi-image gallery (`product_images` ordered by `sort_order`), related products, rating from the product row itself.
-4. Customer reviews: list + unauthenticated submit (name, 1–5 stars, optional comment) with a 24h-per-product localStorage cooldown.
-5. Search (`name.ilike`, `description.ilike`) via URL `?q=`, with input sanitization (100-char cap), 300ms debounce, stale-response guard, 60-char display truncation — plus live suggestions in the Navbar.
-6. Persistent cart (Zustand + localStorage) with stock-capped quantity steppers, out-of-stock UI, and `formatEGP` totals (display-only).
-7. Manual checkout with Zod validation and payment-screenshot upload to Supabase Storage (`receipt_path` stored, 1-hour signed URL for display).
-8. Order creation through the `createorder` Edge Function (client sends only `items {product_id, quantity}` + `contactInfo` + `receipt_path`; server returns `{ id, total_price }`).
-9. Order confirmation screen showing items, server-priced total, receipt image, and reference ID — guarded: redirects home without `state.order.id`.
-10. Wishlist heart toggle (UI-only, not persisted), newsletter signup (UI-only, not persisted), catch-all 404 route.
+Auth level `anon` = anyone with the public anon key. All client reads use it.
 
-**Critical user flows:**
+| # | Target | Op | file:line | Auth | Payload shape |
+|---|---|---|---|---|---|
+| D1 | `store_settings` | SELECT key,value | supabase.js:69-77 | anon | → `{key: value}` incl. `payment_bank_name/_iban/_instapay/_account_name` |
+| D2 | `categories` | SELECT * ORDER name | supabase.js:82-90 | anon | — |
+| D3 | `categories` | SELECT * eq slug SINGLE | supabase.js:95-104, 122-129 | anon | `slug` in URL path |
+| D4 | `products_with_ratings` (view) | SELECT + categories join, eq is_featured | supabase.js:109-117 | anon | — |
+| D5 | `products_with_ratings` | SELECT + join, eq category_id, optional price ORDER | supabase.js:131-146 | anon | `slug`, `price-low\|price-high` |
+| D6 | `products_with_ratings` | SELECT + join, eq id SINGLE | supabase.js:151-160 | anon | `id` from `/product/:id` |
+| D7 | `product_images` | SELECT * eq product_id ORDER sort_order | supabase.js:165-174 | anon | product id |
+| D8 | `products_with_ratings` | SELECT + join, eq category_id, neq id, LIMIT 4 | supabase.js:179-189 | anon | related-products |
+| D9 | `products_with_ratings` | SELECT + join, `.or(name.ilike,description.ilike)` ORDER name | supabase.js:237-245 | anon | sanitized ≤100-char query (strips `%_,()'"\`) |
+| D10 | `reviews` | SELECT * eq product_id ORDER created_at desc | supabase.js:250-259 | anon | product id |
+| D11 | `reviews` | SELECT rating eq product_id (avg computed client-side) | supabase.js:301-316 | anon | product id |
+| D12 | `products_with_ratings` | SELECT + join ORDER avg_rating, review_count LIMIT 8 | supabase.js:321-330 | anon | — |
+| D13 | Edge `upload-receipt` | POST FormData{file} → `{path}` | supabase.js:28-43 | anon key in headers | JPEG/PNG/WEBP ≤5 MB (client pre-check; server re-checks magic bytes) |
+| D14 | Edge `createorder` (via functions.invoke) | POST `{items, contactInfo, receipt_path}` → `{id, total_price, receipt_signed_url?}` | supabase.js:196-223 | anon key | items `[{product_id, quantity}]` only — **no prices** |
+| D15 | Edge `submit-review` | POST JSON `{product_id, name, rating, comment}` → row | supabase.js:265-296 | anon key in headers | server clamps name≤80, comment≤1000, rating int 1–5 |
+| D16 | (server) `products` | SELECT id,price,name WHERE id IN (…) | createorder:108-117 | service_role | ids derived from items |
+| D17 | (server) RPC `reserve_stock` / `release_stock` | atomic `UPDATE … WHERE stock >= qty` / add-back | createorder:132-147,45-54; migrations | service_role only (REVOKE+GRANT verified) | product_id + qty |
+| D18 | (server) `orders` / `order_items` | INSERT order (status `pending`), INSERT lines, DELETE order on lines-failure | createorder:150-180 | service_role | server-computed total; receipt unique-violation → friendly error |
+| D19 | (server) Storage `payment-screenshots` | LIST receipts/ (existence) + createSignedUrl 600 s | createorder:100-105,185-193; upload-receipt:102-108 | service_role | path regex `receipts/<uuid>.(jpg\|jpeg\|png\|webp)` |
+| D20 | (server) `reviews` | INSERT + SELECT row | submit-review:51-60 | service_role | — |
+| D21 | (server) Cloudinary sign | returns `{timestamp, signature, api_key, cloud_name, folder:"product-images"}` | cloudinary-sign:23-36 | presence-only "auth" (see SEC-04) | nothing required |
 
-- **Browse → Product:** `Home.jsx:25-29` / `Category.jsx:23` fetch via `supabase.js` (`products_with_ratings`) → `ProductCard.jsx:55,113` links to `/product/:id` → `ProductDetail.jsx:51-67` loads `fetchProductById` + `fetchProductImages` + `fetchRelatedProducts` in parallel; ratings come on the product row (`72-73`).
-- **Review:** `ProductDetail.jsx:107-119` loads `fetchProductReviews` only; `handleReviewSubmit (128-180)` enforces the localStorage cooldown (`134-140`), calls `submitReview (supabase.js:208-222)`, then optimistically prepends the review and recomputes the average locally (`161-166`).
-- **Cart:** `cartStore.js:11-73` `addToCart` / `updateQuantity` / `removeFromCart` recompute `totalItems`/`totalPrice` for display; `updateQuantity` caps at `maxStock` (`55`); `Cart.jsx:105-111` passes `product.stock` and disables increment at cap; `navigate('/checkout')` on CTA.
-- **Checkout (manual payment):** Step 1 contact (`Checkout.jsx:47-52`, Zod schema `12-17`), Step 2 address + item review, Step 3 upload screenshot (`65-87`) → `uploadPaymentScreenshot (supabase.js:11-32)` returns `{ path, signedUrl }` → `createOrder (supabase.js:151-167)` POSTs `{ items, contactInfo, receipt_path }` to the Edge Function → `clearCart()` → `navigate('/order-confirmation', { state: { order: { id, total_price, items }, contactInfo, receiptUrl } })` (`Checkout.jsx:90-139`). `OrderConfirmation.jsx:10-15` guards on `order?.id` and renders purely from that navigation state — no DB fetch.
+**localStorage:** `leclat-beauty-cart` (full cart snapshots, cartStore.js:104-108); `review_<productId>` (24 h review-cooldown timestamps, ProductDetail.jsx:138-149,176-180). **sessionStorage:** none. **URL-carried data:** only `?q=` search keywords. **External domains:** `fonts.googleapis.com`, `fonts.gstatic.com`, `images.unsplash.com` (hero, Home.jsx:71), `*.supabase.co`, `linkedin.com` (footer link only).
 
----
+## 4. Security Findings
 
-## 4. 🔴 Security Issues
+`[ID] Title | Severity | Status | Evidence | Exploit (1–2 lines) | Fix`
 
-### S1 — Real Supabase credentials on disk in `.env`, no `.gitignore`
-- Severity: **High** (Critical if pushed to a public repo; anon key is long-lived: `exp 2105498020`)
-- Affected: `.env:1-2`, missing `.gitignore` (repo root), `dist/` and `node_modules/` present on disk
-- Description: `VITE_SUPABASE_URL=https://lvrjxjnbugrwinxrqpun.supabase.co` and a live `VITE_SUPABASE_ANON_KEY` (JWT) are stored in plaintext on disk. There is no `.gitignore` (and no git repo yet), so the first `git init && git add .` would commit secrets, build output, and dependencies. Vite inlines `VITE_*` vars into `dist/assets/*.js`, so the key is also public by design once deployed — which makes Supabase RLS policies (not visible here) the only protection, and none are documented.
-- Fix: Add `.gitignore` (`.env`, `dist/`, `node_modules/`), rotate the anon key in Supabase dashboard, move to environment-based deploys, restrict Supabase allowed origins / API settings, and document RLS policies.
+- [SEC-01] No rate limiting on `createorder` → fake-order stock exhaustion | **High** | CONFIRMED | `supabase/functions/createorder/index.ts:38-202` (no IP/quote check; CORS `*` at :3-7) | Attacker loops anon orders for a product; each reserves real stock (atomic decrement :132-147) with `pending` orders nobody pays for — legitimate customers see out-of-stock. No reservation TTL exists. | Per-IP quota + CAPTCHA on checkout; expire/release stale `pending` reservations (cron); alert on order-velocity spikes.
+- [SEC-02] `upload-receipt` unauthenticated + no quota → storage-fill / cost abuse | **High** | CONFIRMED | `supabase/functions/upload-receipt/index.ts:53-119` (no auth, no rate limit; only 5 MB + magic-byte checks :70-87) | Anyone with the public anon key (i.e. anyone) uploads 5 MB images in a loop; orphaned files are never cleaned (see SEC-09). Fills bucket, runs up storage bill. | Require a checkout-session token or CAPTCHA; per-IP daily quota; lifecycle rule purging unreferenced `receipts/*`; cap bucket size.
+- [SEC-03] `submit-review` has NO CAPTCHA despite client comment claiming Turnstile is "verified server-side" | **Medium** | CONFIRMED | Comment `src/lib/supabase.js:261-264` vs `supabase/functions/submit-review/index.ts:1-73` (zero Turnstile/captcha code; nothing in `src/` references Turnstile at all) | Review spam/defacement at scale; the false comment gives sign-off confidence that does not exist. Client cooldown (`ProductDetail.jsx:138-149`) is localStorage-only and trivially cleared. | Add Turnstile/Cloudflare verification server-side (or remove the misleading comment); per-IP + per-product rate limit; moderation queue.
+- [SEC-04] `cloudinary-sign` mints billable upload signatures for ANY caller; unused by storefront | **Medium** | CONFIRMED | `supabase/functions/cloudinary-sign/index.ts:14-17` (rejects only a *missing* `Authorization` header — any value passes), no method check (GET signs too), returns signature+api_key :34-36 | Attacker with no credentials fetches signatures and uploads to your Cloudinary `product-images` folder on your bill; possible ToS/abuse-content liability. Nothing in `src/` calls it. | Disable/delete the function until needed; then require a real admin check (verify Supabase JWT, admin allowlist) and bind signatures to one `public_id`.
+- [SEC-05] `Access-Control-Allow-Origin: *` on all Edge Functions | **Low** | CONFIRMED | createorder :3-7, upload-receipt :4-7, submit-review :4-7, cloudinary-sign :3-7 | Any site can drive the anon-callable endpoints from victims' browsers. Low added risk (anon key is public anyway) but widens CSRF-style abuse and credentialed-misuse confusion. | Restrict to storefront origin(s); keep `*` only if a documented reason exists.
+- [SEC-06] Bank/IBAN payment instructions world-readable via anon SELECT | **Medium** | CONFIRMED | `src/lib/supabase.js:69-77` + `src/pages/Checkout.jsx:446-471` (keys `payment_bank_name/_iban/_instapay/_account_name`) | Scrapers harvest the IBAN with one anon query — phishing/social-engineering fuel. (Improvement vs hardcoding: rotation no longer needs a deploy.) | Acceptable IF intentional; otherwise gate behind a short-lived checkout token, mask IBAN until step 3, monitor enumeration.
+- [SEC-07] RLS + Storage policies + schema constraints unverifiable from this repo | **— (CANNOT VERIFY)** | CANNOT VERIFY | Repo contains zero policy/storage/schema SQL (only 3 stock-function migrations); client relies on anon SELECT across `categories`, `products_with_ratings`, `product_images`, `reviews`, `store_settings` | If any table/bucket is over-permissive (e.g. anon SELECT on `orders`, anon INSERT anywhere, public receipts bucket), PII/receipts leak. Nothing in-repo proves otherwise. | Supply artifacts in §6 (policies dump, bucket settings, table grants).
+- [SEC-08] `orders.receipt_path` uniqueness assumed but not proven (receipt-reuse guard depends on it) | **Medium** | CANNOT VERIFY | `createorder:155-160` maps Postgres `23505` to "receipt already used"; no UNIQUE constraint in repo migrations | If the constraint is missing, one receipt pays for unlimited orders (pay-once, order-many). | Confirm UNIQUE on `orders.receipt_path` in dashboard; add migration to repo.
+- [SEC-09] Orphaned receipt files when upload succeeds but order creation fails | **Medium** | CONFIRMED | `src/pages/Checkout.jsx:118-147` (no delete/cleanup path on `createOrder` failure) | Every failed checkout leaves a permanent image in the private bucket — storage growth + stale PII-adjacent artifacts with no owner. | Delete the uploaded object on order failure, or run an orphan-sweeper (receipts unreferenced after N hours).
+- [SEC-10] Review "one per day" enforced only in bypassable localStorage | **Medium** | CONFIRMED | `src/pages/ProductDetail.jsx:138-149,176-180`; server has no dedup/rate limit (`submit-review/index.ts`) | Clear storage / new browser / direct POST → unlimited reviews per product. | Server-side per-IP + per-product window; CAPTCHA (see SEC-03).
+- [SEC-11] Vercel env hygiene: local `.env` sets `VITE_DISABLE_CAPTCHA=true`, which hard-fails prod builds | **Medium (operational)** | CONFIRMED | `.env:4` + fail-closed guard `vite.config.js:10-14`; `npm run build` with repo `.env` FAILS (verified §8) | If this value is ever set in Vercel/production env, every production build breaks; silent deploy outage at sign-off. | Never set it outside local dev (document in runbook); add CI build check.
+- [SEC-12] Dead `VITE_TURNSTILE_SITE_KEY` config (misspelled `TURNSTILE`, nothing reads it) | **Low** | CONFIRMED | `.env:3`, `.env.example:3`; zero `turnstile/captcha` references in `src/` | False sense of bot protection during review; confusion for whoever wires CAPTCHA next. | Remove until real Turnstile integration ships (then fix spelling to `VITE_TURNSTILE_SITE_KEY`).
+- [SEC-13] Residual header/CSP gaps (improved but thin) | **Low** | CONFIRMED | `vercel.json:4-22` (has nosniff, Referrer-Policy, `frame-ancestors 'none'`); no HSTS, no script/img `connect-src` allowlist, no SRI on Google Fonts (`index.html:10-12`) or Unsplash hero (`Home.jsx:71`) | Compromised CDN/font host can inject code; no HSTS downgrade protection (Vercel sends its own HSTS on `*.vercel.app` — verify on custom domain). | Add HSTS (custom domain), extend CSP (`connect-src https://*.supabase.co`, font/img sources), SRI where possible.
+- [SEC-14] Cart persisted as full product snapshots, stale brand key, no version/TTL | **Low** | CONFIRMED | `src/store/cartStore.js:28-108` (key `leclat-beauty-cart`, whole `product` objects incl. price/stock) | Price tampering can't reach the server (repriced, §5 PASS), but stale prices display, snapshots bloat storage, old shapes never migrate. XSS-readable by design of any XSS. | Persist `{product_id, quantity}` only; rehydrate from DB; add `version` + TTL.
+- [PASS-01] Order integrity: client sends NO prices — server reprices from DB | n/a | CONFIRMED SECURE | `Checkout.jsx:135-147` sends only `product_id+quantity`; `createorder:108-129` prices via integer-cents math from `products.price`; qty validated int 1–100/line, merged cap 100, ≤50 lines (:66-83); receipt regex + existence check (:96-105); stock reserved atomically (:132-147) with rollback (:45-54,156,176-178) | — | — |
+- [PASS-02] No XSS/injection surface in client rendering | n/a | CONFIRMED SECURE | Zero `dangerouslySetInnerHTML/innerHTML/eval` in `src/`; search strips PostgREST reserved chars + 100-char cap (`supabase.js:228-245`); reviews render as React text (`ProductDetail.jsx:486-511`); `target=_blank` has `rel=noopener noreferrer` (`Footer.jsx:66-68`); no user-controlled redirects (`navigate()` paths static; suggestion nav uses DB ids, `Navbar.jsx:97-102`) | — | — |
+- [PASS-03] No secret leakage beyond the public-by-design anon key | n/a | CONFIRMED SECURE | `.env` untracked + gitignored; no `service_role`/API-secret/private URL in repo or `src/`; `console.*` emit generic strings only (`Checkout.jsx:124,159`, `lib/utils.js:15-20` never surfaces raw DB errors); PII lives in memory/navigation state, never localStorage/URLs | — | — |
 
-### S3 — Direct anonymous writes remain for reviews and Storage (orders moved to Edge Function)
-- Severity: **High**
-- Affected: `src/lib/supabase.js:18-23,208-222`
-- Description: Order writes now go through the `createorder` Edge Function (good), but `submitReview` still inserts directly with the anon key (including a `.select().single()` round-trip, so anon also needs `SELECT` on `reviews`), and payment screenshots upload straight from the browser. Anyone can spam reviews and uploads with no login, CAPTCHA, or rate limit. No policies/migrations are in the repo to prove RLS posture either way.
-- Fix: Route reviews through the Edge Function (or least-privilege `INSERT` + no public `SELECT`), add CAPTCHA/rate-limiting, require signed upload URLs. Do not expose `orders.email/phone/address` for public `SELECT`.
+## 5. Bugs & Code Issues
 
-### S5 — Payment-proof upload still lacks an extension allowlist (naming + signed URLs fixed)
-- Severity: **High**
-- Affected: `src/lib/supabase.js:14-16` (`file.name.split('.').pop()`, no allowlist), `src/pages/Checkout.jsx:70-79` (`file.type.startsWith('image/')`, 10 MB client-only check)
-- Description: Filenames now use `crypto.randomUUID()` and display goes through 1-hour signed URLs (fixed). But client MIME checks are still trivially bypassed (curl with fake `Content-Type`), and `fileExt` still accepts anything (`html`, `svg`, `php`, extensionless, `foo.jpg.php`). If the bucket is public, an uploaded HTML/SVG executes in victims' browsers (stored XSS + phishing). No server-side magic-byte check, no AV scan.
-- Fix: Validate server-side (Edge Function or Storage policy): allowlist `jpg/jpeg/png/webp`, verify magic bytes + dimensions, enforce size, strip EXIF. Set `Content-Disposition: attachment` and `Content-Security-Policy: sandbox` on the bucket.
+`[ID] Title | Severity | Status | Evidence file:line | User-visible impact + reproduction | Fix`
 
-### S6 — PII + payment receipts handling improved but retention posture unknown
-- Severity: **High**
-- Affected: `src/lib/supabase.js:26-31`, `src/pages/Checkout.jsx:101,115-122`, `src/pages/OrderConfirmation.jsx:116-128`
-- Description: Uploads now store the private `receipt_path` and render via short-lived `createSignedUrl()` (fixed). Remaining unknowns: whether the bucket is actually private, who else can mint signed URLs, and PII (`full_name`, `email`, `phone`, `address`) retention/deletion.
-- Fix: Confirm bucket is private, scope signed-URL minting to owner/admin, minimize retained PII, and add a retention/deletion policy.
+- [BUG-01] `ProductCard` quick-add stock logic is boolean-broken; can push cart past stock | **Medium** | CONFIRMED | `src/components/ProductCard.jsx:37-55` (`canAdd` is a boolean; `if (canAdd <= 0)` and `if (canAdd === 1)` are dead; existing-cart quantity ignored) | Impact: from any grid, click Add N times on a stock-2 item → cart holds N; checkout then fails with "Insufficient stock". Repro: stock=2 product → Add ×3 from card → cart qty 3. (Server `reserve_stock` still protects inventory.) | Mirror `ProductDetail.jsx:194-219` logic: compute `canAdd = stock − inCart`, clamp, message when capped.
+- [BUG-02] No route code-splitting: single 365 KB index chunk (107 KB gzip) | **Low (perf)** | CONFIRMED | `src/App.jsx:1-12` (all pages statically imported; zero `React.lazy` in `src/`); build output §8 (`index-CWwq7Yhf.js 365 KB`) | Slower first paint on mobile networks; whole app + Supabase client ships for every route. | `React.lazy` + `Suspense` per route; keep `manualChunks` vendors.
+- [BUG-03] `animate-in …` classes are dead (animate plugin not installed) | **Low** | CONFIRMED | `Checkout.jsx:256,343,435`, `OrderConfirmation.jsx:30`, `Navbar.jsx:348,391` vs `tailwind.config.js:41` (`plugins: []`), absent from `package.json` | Step transitions / confirmation zoom / mobile-menu slide silently do nothing — UI looks static vs design intent. | Install `tailwindcss-animate` and configure, or replace with built-ins.
+- [BUG-04] `shadow-soft` vs `shadow-card` two-sources-of-truth | **Trivial** | CONFIRMED | `tailwind.config.js:28-31` defines `card/card-hover` (unused); code uses CSS utilities `.shadow-soft` (`index.css:23-30`) | Future shadow edits land in the wrong place; visual drift. | Move into config (`soft`, `soft-hover`), delete custom CSS (or vice versa).
+- [BUG-05] Hex-contrast helpers misbehave on non-6-digit/invalid colors | **Low** | CONFIRMED | `src/pages/Category.jsx:56-64`, `src/components/CategoryCard.jsx:7-15` (`substr` assumes 6-digit hex; `#fff`/bad DB value → NaN brightness → wrong text color) | A category with short/invalid `accent_color` renders unreadable banner/tile text. Repro: set `accent_color='#fff'` → dark text on near-white assumed wrongly (or white-on-light). | Normalize 3-digit hex, validate `/^#?[0-9a-f]{6}$/i`, safe default in try/catch.
+- [BUG-06] Checkout `<label>`s not associated with inputs (a11y) | **Low** | CONFIRMED | `src/pages/Checkout.jsx:269,289,309,392,475` (`<label>` without `htmlFor`; inputs without `id`) | Screen readers don't announce field purpose; smaller tap targets on mobile. (Review form does it right: `ProductDetail.jsx:531-544`.) | Add `htmlFor`/`id` pairs.
+- [BUG-07] Refresh/back on `/order-confirmation` loses the order → bounced home | **Low (UX)** | CONFIRMED | `src/pages/OrderConfirmation.jsx:11-15` (guard `<Navigate to="/" replace/>`); state built `Checkout.jsx:150-157` with blob `filePreview` fallback that can't survive reload | User refreshing the confirmation (or sharing it) sees the home page with no receipt/reference and may re-order. Privacy-positive, UX-negative. | Persist minimal `{id, total_price}` in `sessionStorage` as fallback with a "lookup not available offline" note, or document as intended.
+- [BUG-08] Dead code: unused `contactInfo` const, unused `PageSkeleton`, empty `src/data/`, dead `manualChunks` branch | **Trivial** | CONFIRMED | `Checkout.jsx:130-134` (built then shadowed by inline object :140-144); `Skeleton.jsx:38-54` (`PageSkeleton` never imported); `src/data/` empty; `vite.config.js:31` matches `@tanstack/react-query` (not installed) | Confusion + tiny bundle waste; no user impact. | Delete all four.
+- [BUG-09] Over-fetching: `select('*')` + unbounded review list, no pagination | **Low (perf)** | CONFIRMED | `supabase.js:82-90,95-104,122-129,165-174,250-259` (`select('*')`); `fetchProductReviews` returns all rows | Wide rows + long review threads slow category/product pages and inflate transfer. | Select needed columns; paginate reviews (limit + "load more").
+- [BUG-10] `release_stock` adds back blindly with no cap; `submit-review`/`cloudinary-sign` lack method checks | **Low** | CONFIRMED | `20261012193152_version_stock_functions.sql:1-12`; `submit-review/index.ts` (no POST check), `cloudinary-sign/index.ts:9-17` | Only service_role can call stock RPCs (mitigated), but double-release or replay inflates stock; GET requests hit function logic unnecessarily. | Clamp release to a sane ceiling / idempotent reservation tokens; enforce `POST` (+405).
+- [PASS-04] Checkout validation actually enforced; double-submit safe; empty-cart guarded | n/a | CONFIRMED OK | Zod schema `Checkout.jsx:13-18`, `handleSubmit(onFinalSubmit, onInvalid)` at :550, step triggers :59-74, `isSubmitting` guard + disabled buttons :108,539,549, reset in `finally` :162, empty-cart screen :165-182 | — | — |
+- [PASS-05] Invalid category slugs render proper 404; search debounce/stale-guard correct; product 404 handled | n/a | CONFIRMED OK | `Category.jsx:34-42,70-72` (`PGRST116` → `<NotFound/>`); `Search.jsx:29-57` (300 ms debounce, request-id guard, cleanup invalidation); `Navbar.jsx:61-86,105-110`; `ProductDetail.jsx:243-258` | — | — |
 
-### S7 — Review abuse surface reduced to a bypassable client cooldown
-- Severity: **Medium** (spam: High likelihood; script execution: Low in React but still a risk via SVG/attributes)
-- Affected: `src/lib/supabase.js:208-222`, `src/pages/ProductDetail.jsx:128-140` (cooldown), review render `~460-490` (`{review.full_name}`, `{review.comment}`)
-- Description: A 24h-per-product localStorage cooldown now exists, but it is trivially bypassed (clear storage / new browser / script the Edge Function–less direct insert). Still no length caps, moderation, CAPTCHA, or purchase check. React escapes text by default (no `dangerouslySetInnerHTML` found — good), but abusive content, links, and Unicode tricks are still stored and rendered to all visitors.
-- Fix: Enforce server-side (name ≤ 80 chars, comment ≤ 1000 chars, rating 1–5 int, per-IP/per-product rate limit), require purchase or CAPTCHA, add moderation flag + profanity filter.
+## 6. Items I CANNOT VERIFY from this repo
 
-### S8 — Sensitive PII in `console.error` + verbose Supabase errors to UI-adjacent logs
-- Severity: **Low**
-- Affected: `src/pages/Home.jsx:37`, `src/pages/Category.jsx:31`, `src/pages/ProductDetail.jsx:88,115,175`, `src/pages/Search.jsx:39`, `src/pages/Checkout.jsx:134`, `src/components/Navbar.jsx:81`
-- Description: Full Supabase error objects (which can include query, table, and hint details) are logged to the browser console on every failure, aiding reconnaissance.
-- Fix: Log a generic message to console, send details to a server-side logger (Sentry etc.), and show only user-friendly text.
+For each, the exact artifact or dashboard screen required:
 
-### S9 — Hardcoded bank details (IBAN) in the client bundle
-- Severity: **Medium**
-- Affected: `src/pages/Checkout.jsx:428-436` (`FR76 3000 4018 2901 2345 6789 012`, `L'ÉCLAT Haute Beauté SARL`, `Haute Bank International / Instapay`)
-- Description: Real-looking banking instructions are baked into JS shipped to everyone. Rotation requires a code deploy, and scrapers can harvest the IBAN for fraud/social-engineering.
-- Fix: Serve payment instructions from a backend/config endpoint, mask by default, and make them environment-specific.
+1. **RLS policies** (tables `products`, `categories`, `product_images`, `products_with_ratings`, `reviews`, `orders`, `order_items`, `store_settings`) — need: Supabase Dashboard → Authentication → Policies **or** SQL dump (`pg_policies` + `SELECT grantee,privilege_type FROM information_schema.role_table_grants`). Must prove: anon can SELECT catalog/reviews/settings only; anon has ZERO INSERT/UPDATE/DELETE anywhere; anon has ZERO SELECT on `orders`/`order_items`.
+2. **`payment-screenshots` bucket privacy + policies** — need: Dashboard → Storage → bucket settings screenshot (Public/Private) + Storage policies SQL (`storage.objects` policies). Must prove: bucket PRIVATE, no anon read; signed-URL minting scoped.
+3. **UNIQUE constraint on `orders.receipt_path`** — need: Dashboard → Table Editor → `orders` → constraints, or `\d orders` / `pg_constraint` dump. `createorder` assumes it (SEC-08).
+4. **`reserve_stock`/`release_stock` deployment + grants** — need: `SELECT * FROM pg_proc` / grants dump confirming the two migrations actually applied on the linked project and `anon/authenticated` truly lack EXECUTE.
+5. **Edge Function deployment parity** — need: Dashboard → Edge Functions → deployed code hash + version for `createorder`, `upload-receipt`, `submit-review`, `cloudinary-sign` (repo copy may differ from production); plus function logs showing error-rate.
+6. **Rate-limit / WAF / CAPTCHA settings** — need: Dashboard → Project Settings → API rate limits, any WAF/Bot-management or Cloudflare Turnstile dashboard proving throttling on Functions/Auth/Storage (relevant to SEC-01/02/03/10).
+7. **Supabase Auth + service_role key custody** — need: confirmation of who holds the service_role key, rotation history, and that it exists only in Function secrets (never in Vercel/client env).
+8. **PII retention/deletion posture** — need: written policy for `orders` PII + receipt images (retention window, deletion procedure, who can view receipts in Dashboard/Storage).
+9. **Custom-domain HTTPS/HSTS** — need: response headers from the production domain (`curl -sI`) proving HSTS + final CSP (Vercel defaults differ per plan/domain).
 
-### S10 — Cart held in plaintext `localStorage`, no expiry
-- Severity: **Medium**
-- Affected: `src/store/cartStore.js:4-83` (`persist` name `leclat-beauty-cart`)
-- Description: Full product objects persist indefinitely in `localStorage`, readable by any XSS payload. Price tampering via localStorage no longer reaches order creation (server reprices — S2 fixed), but stale prices still display and full product snapshots bloat storage. No versioning/migration or TTL.
-- Fix: Persist only `{ product_id, quantity }`, rehydrate prices from DB, add version + TTL, and clear on order. Consider `sessionStorage` for checkout PII.
+## 7. Dependency audit
 
-### S11 — Missing security headers / CSP; third-party assets without integrity
-- Severity: **Medium**
-- Affected: `index.html:10-12` (Google Fonts), `src/pages/Home.jsx:68` (`images.unsplash.com` hero), no CSP/HSTS/X-Frame-Options in repo
-- Description: No `Content-Security-Policy`, `Strict-Transport-Security`, `X-Content-Type-Options`, or SRI (`integrity`/`crossorigin`) is configured. A compromised CDN/font/image host can inject code. No `referrer`/`permissions` policy either.
-- Fix: Add CSP (`default-src 'self'`, `img-src self https: data:`, `font-src fonts.gstatic.com`, `connect-src self https://*.supabase.co`), HSTS, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, and SRI where possible. Serve deploys over HTTPS only.
+`npm audit` (network available; full run): **12 vulnerabilities (5 moderate, 7 high)**. `npm outdated`: most majors behind (React 18→19, Vite 5→8, RRD 6→7, Tailwind 3→4) — upgrade debt, not vulns per se.
 
-### S12 — Rate limiting still missing on reviews, newsletter, checkout
-- Severity: **Medium**
-- Affected: `src/lib/supabase.js:208-222` (reviews), `src/components/Footer.jsx:9-14` (newsletter), checkout upload
-- Description: Search is now debounced with stale-request guards (`Search.jsx:17-55`, `Navbar.jsx:61-86`), and reviews have a weak client cooldown (see S7). Still no CAPTCHA, per-IP quota, or backend throttle on reviews/uploads/newsletter/checkout — all scriptable in a loop.
-- Fix: Per-IP quotas via Edge Functions / WAF, CAPTCHA on review + checkout, and bucket upload quotas.
+| Advisory | Severity | Runtime vs dev-only | Verdict |
+|---|---|---|---|
+| `react-router` 6.0.0–7.17.0: open redirect via backslash (`GHSA-wrjc-x8rr-h8h6`, CVE-2025-68470 bypass) + SSR `deserializeErrors` constructor injection (`GHSA-337j-9hxr-rhxg`) — installed via react-router-dom 6.30.6 | moderate | **Production bundle**, but barely exploitable here: SPA `BrowserRouter`, no SSR hydration path, all `to=`/`navigate()` targets are static or DB ids | Upgrade to RRD 7.x when convenient (P2); do not pass user input to `to=`/`navigate()` |
+| `esbuild ≤0.24.2` (`GHSA-67mh-4wv8-2f99` — dev server accepts cross-origin requests) via vite 5.4.21 | moderate | **Dev server only** | Never expose `npm run dev` to untrusted networks; upgrade Vite P2 |
+| `postcss-selector-parser <7.1.6` quadratic-complexity DoS (`GHSA-rj75-hqrm-r3gf`) via tailwindcss chain | moderate | **Build-time only** | Upgrade Tailwind P2 |
+| `braces` stack-exhaustion (`GHSA-vfj7-8cjw-p6xm`) via chokidar/micromatch → tailwindcss | high | **Build-time only** | Same as above |
+| `source-map-js` event-loop DoS (`GHSA-68fv-2mgg-jv7q`) | high | **Build-time only** | Same as above |
 
-**Resolved and removed:** S2 (prices now computed server-side by the `createorder` Edge Function; client sends no `total_price`/`unit_price`), S4 (PostgREST reserved chars stripped, 100-char cap, empty-query early return in `searchProducts`).
+No lint/test tooling exists (`package.json` scripts: `dev/build/preview` only) — CVEs and regressions go unnoticed. Recommend adding `npm audit` to CI.
 
----
+## 8. Build/lint results
 
-## 5. 🟡 Bugs & Code Issues
+- `npm run build` **with the repo's `.env` (`VITE_DISABLE_CAPTCHA=true`): FAILS** — `vite.config.js:10-14` throws `VITE_DISABLE_CAPTCHA=true must not be set in production` (fail-closed guard working as designed, but the shipped `.env` can never produce a prod build).
+- `VITE_DISABLE_CAPTCHA= npm run build`: **PASSES** — `vite v5.4.21`, 2070 modules, chunks: `index 365 KB` (gzip 107), `vendor-supabase 214 KB` (gzip 55), `vendor-motion 128 KB` (gzip 42), `vendor-icons 18 KB`, CSS 35 KB. No build warnings besides chunk-size advisory implied by single 365 KB index chunk (see BUG-02). `dist/` regenerated on disk (untracked).
+- Lint/tests: **not configured** — nothing to run (`package.json` has no lint/test scripts; no eslint/vitest/playwright in repo).
+- `npm ci` not re-run (node_modules present and consistent with lockfile; `npm audit`/`outdated` executed against it).
 
-### B1 — Dead error check in Category page; invalid slugs throw unhandled
-- Affected: `src/pages/Category.jsx:23-24`, `src/lib/supabase.js:77-101`
-- Problem: `fetchProductsByCategorySlug` returns `{ data, category }` or throws — never `{ error }`. `if (res.error)` is dead code. An unknown `slug` throws from `.single()` and only shows a generic banner, with no 404 state.
-- Fix: Destructure in try/catch; if `catError.code === 'PGRST116'` render a proper Not Found page.
+## 9. Previous Claims Re-verification table
 
-### B3 — `handleSubmit` imported but never used; final submit bypasses form validation
-- Affected: `src/pages/Checkout.jsx:29-33,47-62,90-139`
-- Problem: `handleSubmit` from `react-hook-form` is destructured (`31`) and never called; step navigation uses `trigger()` and final submit uses `getValues()` directly, so full-form validation never runs at submit time. The unused `ImageIcon` import (`Checkout.jsx:6`) is also dead code.
-- Fix: Wrap steps in `<form onSubmit={handleSubmit(onFinalSubmit)}>` and call `await trigger()` + `handleSubmit` consistently; remove unused imports.
+Old finding ID → verdict (code evidence from this session):
 
-### B4 — Quantity caps are UI-only; `addToCart` merge can exceed stock, server stock flow unverified
-- Affected: `src/store/cartStore.js:11-35,51-73`, `src/pages/ProductDetail.jsx:189-192`, `src/pages/Cart.jsx:105-111`
-- Problem: The stepper (`handleIncrement`), `updateQuantity(maxStock)`, and disabled states now cap at `product.stock` (fixed). Remaining gaps: `addToCart` merges into an existing line with no cap (5 in cart + add 5 at stock 5 → 10), and stock decrement/reservation on the server is unverified (Edge Function code not in repo).
-- Fix: Cap the merged quantity in `addToCart` (pass stock in), validate + decrement stock in the order transaction (row lock / `CHECK (stock >= 0)`).
-
-### B6 — Confirmation guard fixed; `0`-total hidden and address block dead
-- Affected: `src/pages/OrderConfirmation.jsx:13-15,97-114`
-- Problem: Direct visits now `<Navigate to="/" replace />` and no fake IDs are generated (fixed). Remaining: `order.total_price &&` hides a legitimate `0` total (falsy), and the Delivery Address block (`97-104`) can never render because `Checkout.jsx:128` builds `order` without `address`.
-- Fix: Render `total_price != null` instead of truthiness; include `address` in the navigation-state order (or drop the dead block).
-
-### B8 — File-extension parsing still weak (randomness fixed)
-- Affected: `src/lib/supabase.js:14-16`
-- Problem: `crypto.randomUUID()` naming is done (fixed). But `file.name.split('.').pop()` still returns the whole name for extensionless files and keeps `php` in `photo.jpg.php`, with no allowlist and no lowercasing.
-- Fix: Allowlist `['jpg','jpeg','png','webp']` (lowercased, single ext), reject others before upload.
-
-### B10 — Animation classes without the plugin (dead CSS)
-- Affected: `src/pages/Checkout.jsx:231,318,410` (`animate-in fade-in`), `src/pages/OrderConfirmation.jsx:30` (`animate-in zoom-in`), `src/components/Navbar.jsx:348,391` (`animate-in slide-in-from-top`), `package.json:11-30`
-- Problem: `tailwindcss-animate` / `tw-animate-css` is not installed, so these classes do nothing.
-- Fix: Install and configure the animate plugin or replace with Tailwind built-ins (`transition`, `animate-pulse` already used elsewhere).
-
-### B11 — `shadow-soft` naming collision/confusion
-- Affected: `tailwind.config.js:28-31` (`boxShadow.card`, `card-hover`) vs `src/index.css:23-30` (`.shadow-soft`, `.shadow-soft-hover`)
-- Problem: Code uses `shadow-soft` (custom utility) while config defines `shadow-card` (unused). Two sources of truth for the same shadow.
-- Fix: Move shadows into `tailwind.config.js` (`soft`, `soft-hover`) and delete the custom CSS, or vice versa.
-
-### B12 — Fragile hex-contrast helpers crash on short/invalid hex
-- Affected: `src/pages/Category.jsx:48-56`, `src/components/CategoryCard.jsx:7-15`
-- Problem: `hex.replace('#','')` + `substr` assumes 6-digit hex. `null` → default, but `#fff`, `#fff8`, named colors, or a bad DB value yield `NaN` brightness and wrong text color.
-- Fix: Normalize 3-digit hex, validate with `/^#?[0-9a-f]{6}$/i`, and wrap in try/catch with a safe default.
-
-### B14 — Newsletter signup is fake + unvalidated
-- Affected: `src/components/Footer.jsx:9-14,54-70`
-- Problem: `handleSubscribe` only flips `isSubscribed` locally; email is discarded on reload, never sent anywhere. No length/typo check beyond `type="email"`.
-- Fix: Wire to Supabase table / newsletter API with double opt-in, or remove the form.
-
-### N1 — NEW: `undefined` stock renders “In Stock (undefined available)”
-- Affected: `src/pages/ProductDetail.jsx:346-372`
-- Problem: The stepper guard is `product.stock !== 0` and the label interpolates `product.stock` directly. Any product whose row lacks `stock` (null/undefined) shows a purchasable stepper plus the literal text “In Stock (undefined available)”.
-- Fix: Treat nullish stock as unknown — hide the count (`In Stock` without a number) or block purchase until stock is known: `{product.stock == null ? 'In Stock' : ...}` and cap `handleIncrement` only when stock is a number.
-
-### N2 — NEW: `addToCart` can push a line past stock
-- Affected: `src/store/cartStore.js:11-35`, `src/pages/ProductDetail.jsx:182-187`
-- Problem: The quantity selector is capped, but `addToCart(product, quantity)` adds onto any existing line with no cap, so repeated adds exceed `product.stock` (and the Cart cap only constrains the stepper, not the stored value).
-- Fix: Pass available stock into `addToCart` and clamp: `quantity: Math.min(existing + added, stock)`.
-
-### N3 — NEW: Order-confirmation address block is unreachable
-- Affected: `src/pages/Checkout.jsx:124-132`, `src/pages/OrderConfirmation.jsx:96-104`
-- Problem: Since the Edge Function migration, the navigation-state `order` is built as `{ id, total_price, items }` with no `address`, so the Shipping Address section never renders despite the UI supporting it.
-- Fix: Include `address: formData.address` in the navigation-state order (display-only; the server remains the source of truth for the stored order).
-
-### N4 — NEW: `submitReview` insert-then-select repeats the old RLS failure pattern
-- Affected: `src/lib/supabase.js:208-222`
-- Problem: `.insert().select().single()` requires anon `SELECT` on `reviews` right after insert — the same pattern that caused RLS failures on orders before the Edge Function migration. If `reviews` RLS grants `INSERT` but not `SELECT`, every review submit errors even though the row was written (and the retry then trips the 24h cooldown, confusing users).
-- Fix: Route review creation through an Edge Function returning the row, or drop the `.select()` and prepend a locally built review object.
-
-**Resolved and removed:** B2 (order creation is a single Edge Function call — server-side atomicity still unverified, see B4), B5 (`|| 25` fallback removed; real stock confirmed), B6-guard + fake ID (redirect guard added, `Math.random()` fallback deleted), B7 (all product reads via `products_with_ratings`; per-card `fetchProductRating` deleted), B9 (`NotFound.jsx` + catch-all route + `vercel.json` rewrite), B13 (`src/lib/format.js` `formatEGP` used in all 5 price-display files), B15 (300ms debounce + request-id stale guard + 60-char display truncation in Search and Navbar suggestions), B16 (`src/config/categories.js` single source; Navbar/Footer/ProductCard/OrderConfirmation consume it).
-
----
-
-## 6. Dependencies & Outdated Packages
-
-`package.json:11-30`, lockfile v3. No `npm audit` / Dependabot / Renovate configured. Versions are ~Oct 2024 (2 years old as of 2026-09-21):
-
-| Package | Pinned | Status / note |
+| Old ID | Verdict | Evidence / note |
 |---|---|---|
-| `react`, `react-dom` `^18.3.1` | 18.x | Behind: React 19.x stable since Dec 2024 (new compiler, Server Components). No known RCE in 18.3.1, but misses 19 a11y/perf fixes. Plan a codemod upgrade. |
-| `vite` `^5.4.8` | 5.x | Behind: Vite 6 (Nov 2024) + 7 (2025). Vite 5 no longer receives minor features; esbuild/Rollup transitive CVEs fixed in 6/7. Upgrade to `^6`/`^7` and re-test `vite.config.js:1-11`. |
-| `@vitejs/plugin-react` `^4.3.2` | 4.x | Keep in lockstep with Vite; 5.x required for Vite 6+. |
-| `react-router-dom` `^6.26.2` | 6.x | Behind: v7 (2024) renames to `react-router`. 6.x still maintained, no critical CVE, but new `createBrowserRouter` data APIs / prefetch only in 7. |
-| `@supabase/supabase-js` `^2.45.4` | 2.x | ~1 year behind 2.5x (2026). Older `auth-js`/`realtime-js` had token-refresh and WS-reconnect bugs. Run `npm audit`; upgrade to latest `2.x`. |
-| `zustand` `^4.5.5` | 4.x | Behind: v5 (2024) requires React 18+ and drops deprecated APIs. Current usage (`create`, `persist`) is v5-compatible — safe to bump. |
-| `zod` `^3.23.8` | 3.x | Behind: 3.24/4.x (2025). No breakout CVE, but 4.x is faster with better `email()`/`url()` checks. |
-| `@hookform/resolvers` `^3.9.0`, `react-hook-form` `^7.53.0` | — | Current for 2024; keep paired (v5 resolvers need RHF 7.55+). |
-| `lucide-react` `^0.453.0` | — | Very old icon set (1000+ icons behind in 2026). No vuln, but larger bundle; consider tree-shaking / selective imports. |
-| `tailwindcss` `^3.4.13`, `postcss` `^8.4.47`, `autoprefixer` `^10.4.20` | — | Tailwind 4.x (2025) is now current (CSS-first config). 3.4 still patched, but plan migration; `postcss 8.4.47` has no critical CVE but update to latest 8.5.x. |
-| `@types/react`, `@types/react-dom` | 18.x | Must match React major on upgrade. |
+| S1 (secrets, no .gitignore) | **FIXED** | `.gitignore:1-7` exists; `.env`, `dist/`, `node_modules/` all untracked (verified via `git ls-files`). Residual: anon key in bundle is public-by-design (PASS-03). |
+| S3 (direct anon writes: reviews + storage) | **FIXED** | Reviews → `submit-review` Edge Function (`supabase.js:265-296`); uploads → `upload-receipt` Function (`supabase.js:17-64`). No direct table/storage writes in client. Residual abuse surface → SEC-01/02/03/10. |
+| S5 (upload ext allowlist) | **FIXED** | Client allowlist `supabase.js:13-15` + server magic-byte sniffing `upload-receipt/index.ts:18-51,80-87` + UUID names `:99-100` + 5 MB both sides. |
+| S6 (PII/receipt handling) | **FIXED (residuals → §6)** | Private-path + 600 s server-minted signed URLs (`createorder:185-193`). Bucket privacy/retention still CANNOT VERIFY (§6 items 2, 8). |
+| S7 (review abuse = client cooldown) | **CONFIRMED** | Cooldown still localStorage-only (`ProductDetail.jsx:138-149`); no server rate limit/CAPTCHA (`submit-review/index.ts`). Server validation added (name≤80/rating/comment≤1000) — partial mitigation only. Now SEC-03/SEC-10. |
+| S8 (PII/verbose errors in console) | **FIXED** | All `console.*` generic (`Checkout.jsx:124,159` etc.); `getErrorMessage` never surfaces raw errors (`utils.js:15-20`). |
+| S9 (hardcoded IBAN) | **FIXED** | No hardcoded bank data in `src/`; served from `store_settings` (`Checkout.jsx:446-471`, `supabase.js:69-77`). New note: values are anon-readable (SEC-06). |
+| S10 (cart in plaintext localStorage) | **CONFIRMED** | Full snapshots, stale key, no version/TTL (`cartStore.js:28-108`). Now SEC-14. |
+| S11 (headers/CSP) | **FIXED (residuals → SEC-13)** | `vercel.json:4-22` added nosniff + Referrer-Policy + minimal CSP. Missing HSTS/full CSP/SRI carried as SEC-13. |
+| S12 (rate limiting) | **CONFIRMED** (newsletter part FIXED — form removed, `Footer.jsx:43-56`) | Reviews/uploads/checkout still unthrottled. Now SEC-01/02/10. |
+| B1 (category dead error check) | **FIXED** | try/catch + `PGRST116` → `<NotFound/>` (`Category.jsx:34-42,70-72`). |
+| B3 (handleSubmit unused) | **FIXED** | `handleSubmit(onFinalSubmit, onInvalid)` wired (`Checkout.jsx:550`); Zod enforced. |
+| B4 (addToCart exceeds stock) | **FIXED** | Merge clamps `Math.min(qty, stock)` (`cartStore.js:43-49`); server atomic reserve verified. Quick-add path still buggy → BUG-01. |
+| B6 (0-total + dead address) | **FIXED** | `order.total_price != null` (`OrderConfirmation.jsx:107`); address in navigation state (`Checkout.jsx:153`). |
+| B8 (weak ext parsing) | **FIXED** | See S5. |
+| B10 (dead animate classes) | **CONFIRMED** | Still used, plugin still absent. Now BUG-03. |
+| B11 (shadow naming) | **CONFIRMED** | Unchanged. Now BUG-04. |
+| B12 (hex contrast) | **CONFIRMED** | Unchanged. Now BUG-05. |
+| B14 (fake newsletter) | **FIXED** | Form removed from `Footer.jsx`. |
+| N1 (undefined stock label) | **FIXED** | `product.stock == null ? 'In Stock' : …` (`ProductDetail.jsx:394-396`). |
+| N2 (addToCart past stock) | **FIXED** | See B4. |
+| N3 (address block unreachable) | **FIXED** | See B6. |
+| N4 (review insert-then-select RLS) | **FIXED** | Service-role Edge Function, no client select. |
 
-Other flags:
-- No test runner (`vitest`/`playwright`), no linter (`eslint`), no `npm audit` script — regressions and CVEs go unnoticed.
-- `dist/index-*.js` is ~568 kB (157 kB gzip) per last build — no code-splitting (`React.lazy` / `manualChunks`); whole app + Supabase ships on first load.
-- No abandoned packages found, but `tailwindcss-animate` is **missing** while its classes are used (see B10).
+No CONFIRMED old item is missing from §§4–5 (S7→SEC-03/10, S10→SEC-14, S12→SEC-01/02/10, B10→BUG-03, B11→BUG-04, B12→BUG-05).
 
-Run: `npm audit`, `npm outdated`, then `npm i -g npm-check-updates && ncu -u` in a branch + `npm run build` regression test.
+## 10. Go-Live Verdict: **NO-GO** (converts to GO once P0 is cleared)
 
----
+Core money-flow is sound (server-side repricing, atomic stock, no price input, no key leaks — PASS-01..03), but the store is sign-off-blocked by abuse vectors that deny inventory to real customers and by unverified server posture.
 
-## 7. Recommendations Summary
+**P0 — must-fix before client sign-off:**
+1. Throttle abuse paths: per-IP quotas (+ CAPTCHA) on `createorder`, `upload-receipt`, `submit-review` (SEC-01/02/03/10); add expiry/release for stale `pending` stock reservations.
+2. Prove server posture with §6 artifacts 1–4: RLS dump, bucket-privacy screenshot, `orders.receipt_path` UNIQUE proof, RPC grants + function deployment parity. If RLS/policies are wrong, nothing else matters.
+3. Neutralize `cloudinary-sign`: delete/disable it (or put real admin auth on it) — it currently mints billable signatures for anyone (SEC-04).
+4. Guarantee deployability: ensure `VITE_DISABLE_CAPTCHA` is unset in Vercel/prod env; add a CI `npm run build` gate (SEC-11, §8).
+5. Fix `ProductCard` quick-add stock accounting (BUG-01) — it manufactures checkout-time "insufficient stock" failures for real shoppers.
+6. Orphan-receipt handling: delete-on-order-failure or sweeper + bucket cap (SEC-02/09).
 
-**P0 — Do this week (blockers / money loss / data leak):**
-1. Rotate Supabase anon key, add `.gitignore`, keep `.env`/`dist`/`node_modules` out of version control (S1).
-2. Audit the `createorder` Edge Function code (not in repo): confirm server-side repricing from `products.price`, atomic order + items insert, and stock decrement — client fixes assume all three (S2 follow-through, B4).
-3. Lock down RLS: least-privilege policies for `reviews` (insert-then-select will fail under locked RLS — N4), private `payment-screenshots` bucket with scoped signed URLs (S3, S6).
-4. Harden upload: extension allowlist + magic-byte check (S5, B8).
+**P1 — this sprint:** CAPTCHA on checkout, mask/gate IBAN display (SEC-06), `htmlFor` labels (BUG-06), review pagination + `select('*')` narrowing (BUG-09), HSTS/CSP hardening (SEC-13), persist `{product_id, quantity}` only (SEC-14), remove dead code/config (BUG-08, SEC-12).
 
-**P1 — Do this sprint (abuse + correctness):**
-5. CAPTCHA + rate limits + server validation on reviews/newsletter/checkout (S7, S12, B14).
-6. Fix Category 404 handling, confirmation `0`-total + address block, `undefined`-stock label, `addToCart` cap (B1, B6, N1–N3).
-7. Move bank instructions to backend config (S9); quiet `console.error` leaks (S8).
-8. Persist only IDs in storage with TTL (S10).
-
-**P2 — Hygiene / tech debt:**
-9. Add CSP/HSTS/SRI, HTTPS-only deploys (S11).
-10. Fix contrast-helper validation, shadow naming, missing animate plugin (B10–B12); fix dead `handleSubmit`/`ImageIcon` (B3).
-11. Upgrade Vite 5→7, React 18→19, Supabase/Zod/Zustand to latest, add ESLint + Vitest + `npm audit` CI, enable code-splitting (bundle is ~568 kB).
-12. Add migrations/seeds, RLS policy docs, Edge Function source, README runbook, and a `LICENSE`.
-
-*If a section above shows “None found”, it means no additional instances beyond those listed were detected in this snapshot.*
+**P2 — hygiene:** route code-splitting (BUG-02), dead animate classes (BUG-03), shadow/hex helpers (BUG-04/05), dependency upgrades + `npm audit` CI (§7), confirmation-refresh story (BUG-07), method checks + release-stock hardening (BUG-10).

@@ -108,7 +108,7 @@ export async function fetchCategoryBySlug(slug) {
  */
 export async function fetchFeaturedProducts() {
   const { data, error } = await supabase
-    .from('products_with_ratings')
+    .from('products')
     .select('*, categories(name, slug, accent_color)')
     .eq('is_featured', true);
 
@@ -129,7 +129,7 @@ export async function fetchProductsByCategorySlug(slug, sortBy = 'default') {
   if (catError) throw catError;
 
   let query = supabase
-    .from('products_with_ratings')
+    .from('products')
     .select('*, categories(name, slug, accent_color)')
     .eq('category_id', category.id);
 
@@ -150,7 +150,7 @@ export async function fetchProductsByCategorySlug(slug, sortBy = 'default') {
  */
 export async function fetchProductById(id) {
   const { data, error } = await supabase
-    .from('products_with_ratings')
+    .from('products')
     .select('*, categories(id, name, slug, accent_color)')
     .eq('id', id)
     .single();
@@ -178,7 +178,7 @@ export async function fetchProductImages(productId) {
  */
 export async function fetchRelatedProducts(categoryId, currentProductId, limit = 4) {
   const { data, error } = await supabase
-    .from('products_with_ratings')
+    .from('products')
     .select('*, categories(name, slug, accent_color)')
     .eq('category_id', categoryId)
     .neq('id', currentProductId)
@@ -235,7 +235,7 @@ export async function searchProducts(query) {
   if (!sanitized) return [];
 
   const { data, error } = await supabase
-    .from('products_with_ratings')
+    .from('products')
     .select('*, categories(name, slug, accent_color)')
     .or(`name.ilike.%${sanitized}%,description.ilike.%${sanitized}%`)
     .order('name');
@@ -245,85 +245,13 @@ export async function searchProducts(query) {
 }
 
 /**
- * Fetch reviews for a product
+ * Fetch bestsellers
  */
-export async function fetchProductReviews(productId) {
+export async function fetchBestsellers(limit = 8) {
   const { data, error } = await supabase
-    .from('reviews')
-    .select('*')
-    .eq('product_id', productId)
-    .order('created_at', { ascending: false });
-
-  if (error) throw error;
-  return data || [];
-}
-
-/**
- * Submit a review via the `submit-review` Edge Function.
- * Verifies Turnstile CAPTCHA server-side and inserts with the service role key.
- */
-export async function submitReview({
-  product_id,
-  productId,
-  name,
-  full_name,
-  fullName,
-  rating,
-  comment,
-}) {
-  const payload = {
-    product_id: product_id ?? productId,
-    name: name ?? full_name ?? fullName,
-    rating,
-    comment,
-  };
-
-  const response = await fetch(
-    `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/submit-review`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-      },
-      body: JSON.stringify(payload),
-    }
-  );
-
-  const result = await response.json();
-  if (!response.ok) throw new Error(result.error || 'Failed to submit review');
-  return result;
-}
-
-/**
- * Fetch product average rating
- */
-export async function fetchProductRating(productId) {
-  const { data, error } = await supabase
-    .from('reviews')
-    .select('rating')
-    .eq('product_id', productId);
-
-  if (error) throw error;
-
-  if (!data || data.length === 0) return { avg_rating: 0, review_count: 0 };
-
-  const avg = data.reduce((sum, r) => sum + r.rating, 0) / data.length;
-  return {
-    avg_rating: Math.round(avg * 10) / 10,
-    review_count: data.length,
-  };
-}
-
-/**
- * Fetch bestsellers sorted by rating (replaces fetchBestsellers)
- */
-export async function fetchBestsellersByRating(limit = 8) {
-  const { data, error } = await supabase
-    .from('products_with_ratings')
+    .from('products')
     .select('*, categories(name, slug, accent_color)')
-    .order('avg_rating', { ascending: false })
-    .order('review_count', { ascending: false })
+    .order('created_at', { ascending: false })
     .limit(limit);
 
   if (error) throw error;

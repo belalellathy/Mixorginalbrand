@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { ChevronLeft, ChevronRight, Sparkles, ShieldCheck, Truck, RefreshCw } from 'lucide-react';
-import { fetchCategories, fetchFeaturedProducts, fetchBestsellersByRating } from '../lib/supabase';
+import { fetchCategories, fetchFeaturedProducts, fetchBestsellers } from '../lib/supabase';
 import { getErrorMessage } from '../lib/utils';
 import ProductCard from '../components/ProductCard';
 import CategoryCard from '../components/CategoryCard';
@@ -28,7 +28,7 @@ export default function Home() {
         const [cats, feats, bests] = await Promise.all([
           fetchCategories(),
           fetchFeaturedProducts(),
-          fetchBestsellersByRating(8)
+          fetchBestsellers(8)
         ]);
 
         if (isMounted) {
@@ -223,7 +223,7 @@ export default function Home() {
             </h2>
           </div>
           <span className="text-xs uppercase tracking-wider text-neutral-400 mt-2 sm:mt-0 font-medium">
-            Top Rated Selections
+            Handpicked Selections
           </span>
         </div>
 
