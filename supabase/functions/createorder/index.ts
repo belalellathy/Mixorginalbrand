@@ -11,6 +11,7 @@ const BUCKET = "payment-screenshots";
 const RECEIPT_RE =
   /^receipts\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(jpg|jpeg|png|webp)$/i;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const SHIPPING_CODE_RE = /^[a-z-]{2,40}$/;
 const MAX_LINES = 50;
 const MAX_QTY = 100;
 const RECEIPT_URL_TTL_SECONDS = 600;
@@ -90,7 +91,19 @@ Deno.serve(async (req: Request) => {
     } catch {
       return errorResponse("Invalid JSON body");
     }
-    const { items, contactInfo, receipt_path } = body ?? {};
+    const { items, contactInfo, receipt_path, shipping_code, expected_total } = body ?? {};
+
+    // Shipping governorate code: validated as a format, priced server-side below.
+    if (typeof shipping_code !== "string" || !SHIPPING_CODE_RE.test(shipping_code)) {
+      return errorResponse("Invalid shipping governorate");
+    }
+    // expected_total is a check against the server-computed total, never a price.
+    if (
+      expected_total !== undefined &&
+      (typeof expected_total !== "number" || !Number.isFinite(expected_total) || expected_total < 0)
+    ) {
+      return errorResponse("Invalid expected total");
+    }
 
     // ---- 1. Validate items (and merge duplicate product lines: F4) ----
     if (!Array.isArray(items) || items.length === 0 || items.length > MAX_LINES) {
@@ -156,7 +169,35 @@ Deno.serve(async (req: Request) => {
       totalCents += Math.round(unit_price * 100) * quantity; // integer math, no float drift
       lines.push({ product_id: p.id, quantity, unit_price, name: p.name });
     }
-    const total_price = totalCents / 100;
+
+    // ---- 4b. Server-side shipping (before any stock is reserved) ----
+    // Looked up before reserve_stock so a shipping/total mismatch returns
+    // before anything is reserved and nothing needs releasing.
+    const { data: rate, error: rateError } = await supabase
+      .from("shipping_rates")
+      .select("code, name_en, price")
+      .eq("code", shipping_code)
+      .eq("is_active", true)
+      .maybeSingle();
+    if (rateError) {
+      console.error("Shipping rate fetch error:", rateError);
+      return errorResponse("Failed to fetch shipping rate", 500);
+    }
+    if (!rate || rate.price == null) {
+      return errorResponse("Shipping is not available for the selected governorate");
+    }
+    const shipping_cents = Math.round(Number(rate.price) * 100);
+    totalCents += shipping_cents;
+    // total_price stays the grand total (products + shipping).
+    const grand_total = totalCents / 100;
+
+    // expected_total is only a race check against the server total, never a price.
+    if (expected_total !== undefined && Math.round(expected_total * 100) !== totalCents) {
+      return json(
+        { error: "Order total has changed", code: "TOTAL_CHANGED", total_price: grand_total },
+        409,
+      );
+    }
 
     // ---- 5. Reserve stock atomically (F1, F2) ----
     for (const line of lines) {
@@ -179,7 +220,18 @@ Deno.serve(async (req: Request) => {
     // ---- 6. Insert order ----
     const { data: order, error: orderError } = await supabase
       .from("orders")
-      .insert([{ full_name, email, phone, address, total_price, receipt_path, status: "pending" }])
+      .insert([{
+        full_name,
+        email,
+        phone,
+        address,
+        total_price: grand_total,
+        receipt_path,
+        status: "pending",
+        shipping_code: rate.code,
+        shipping_name: rate.name_en,
+        shipping_price: shipping_cents / 100,
+      }])
       .select("id")
       .single();
     if (orderError || !order) {
@@ -222,7 +274,13 @@ Deno.serve(async (req: Request) => {
       console.error("Signed URL error:", e); // non-fatal: client falls back to local preview
     }
 
-    return json({ id: order.id, total_price, receipt_signed_url });
+    return json({
+      id: order.id,
+      total_price: grand_total,
+      shipping_price: shipping_cents / 100,
+      shipping_name: rate.name_en,
+      receipt_signed_url,
+    });
   } catch (err) {
     console.error("createorder unhandled error:", err);
     // Don't leave stock reserved for an order that was never created.

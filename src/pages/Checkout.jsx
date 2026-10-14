@@ -5,7 +5,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { Check, Upload, ArrowRight, ArrowLeft, ShieldCheck, Loader2, AlertCircle } from 'lucide-react';
 import { useCartStore } from '../store/cartStore';
-import { uploadPaymentScreenshot, createOrder, fetchPaymentSettings, ALLOWED_RECEIPT_TYPES, MAX_RECEIPT_SIZE_BYTES } from '../lib/supabase';
+import { uploadPaymentScreenshot, createOrder, fetchPaymentSettings, fetchShippingRates, ALLOWED_RECEIPT_TYPES, MAX_RECEIPT_SIZE_BYTES } from '../lib/supabase';
 import { formatEGP } from '../lib/format';
 
 // Zod validation schema for Checkout
@@ -14,6 +14,7 @@ const checkoutSchema = z.object({
   email: z.string().email('Please enter a valid email address'),
   phone: z.string().min(8, 'Please enter a valid phone number (at least 8 digits)'),
   address: z.string().min(10, 'Please provide a complete delivery address (minimum 10 characters)'),
+  shipping_code: z.string().min(1, 'Select a governorate'),
 });
 
 export default function Checkout() {
@@ -23,6 +24,13 @@ export default function Checkout() {
   const [uploadError, setUploadError] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [paymentSettings, setPaymentSettings] = useState(null);
+  const [rates, setRates] = useState([]);
+  const [ratesLoading, setRatesLoading] = useState(true);
+  const [ratesError, setRatesError] = useState(null);
+  const [selectionNotice, setSelectionNotice] = useState(null);
+  const [totalChanged, setTotalChanged] = useState(null);
+  const [acceptedTotal, setAcceptedTotal] = useState(null);
+  const [uploadedReceipt, setUploadedReceipt] = useState(null);
 
   useEffect(() => {
     fetchPaymentSettings()
@@ -42,6 +50,9 @@ export default function Checkout() {
     register,
     handleSubmit,
     trigger,
+    watch,
+    setValue,
+    getValues,
     formState: { errors },
   } = useForm({
     resolver: zodResolver(checkoutSchema),
@@ -51,8 +62,56 @@ export default function Checkout() {
       email: '',
       phone: '',
       address: '',
+      shipping_code: '',
     },
   });
+
+  // The accepted-total override and any 409 banner go stale as soon as the
+  // governorate or the cart changes — clear both so an old server total can
+  // never be displayed or resubmitted.
+  const shippingCode = watch('shipping_code');
+  useEffect(() => {
+    setAcceptedTotal(null);
+    setTotalChanged(null);
+  }, [shippingCode, cartItems]);
+  // Dismiss the stale-selection notice once the user picks a governorate
+  // again (a programmatic clear sets '' and keeps the notice visible).
+  useEffect(() => {
+    if (shippingCode) setSelectionNotice(null);
+  }, [shippingCode]);
+
+  // Fetch active shipping rates once on mount; reused after a 409 so a
+  // stale selection is caught without leaving the checkout.
+  const loadRates = async () => {
+    setRatesLoading(true);
+    setRatesError(null);
+    try {
+      const list = await fetchShippingRates();
+      setRates(list);
+      const current = getValues('shipping_code');
+      if (current && !list.some((r) => r.code === current)) {
+        setValue('shipping_code', '');
+        setSelectionNotice('The previously selected governorate is no longer available. Please choose again.');
+      }
+    } catch (err) {
+      setRatesError(err?.message || 'Failed to load delivery options. Please try again.');
+    } finally {
+      setRatesLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadRates();
+  }, []);
+
+  // Totals in integer cents (no float drift). The cart store is never
+  // mutated here; grandTotal is display + expected_total only, the server
+  // prices the order. An explicitly accepted 409 total overrides display.
+  const selectedRate = rates.find((r) => r.code === shippingCode);
+  const subtotalCents = Math.round(totalPrice * 100);
+  const shippingCents = selectedRate ? Math.round(Number(selectedRate.price) * 100) : 0;
+  const grandTotal = acceptedTotal ?? (subtotalCents + shippingCents) / 100;
+  const ratesUnusable = ratesLoading || ratesError != null || rates.length === 0;
 
   // Step 1 -> Step 2 validation
   const handleProceedToStep2 = async () => {
@@ -65,7 +124,7 @@ export default function Checkout() {
 
   // Step 2 -> Step 3 validation
   const handleProceedToStep3 = async () => {
-    const isValid = await trigger('address');
+    const isValid = await trigger(['address', 'shipping_code']);
     if (isValid) {
       setCurrentStep(3);
       window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -90,13 +149,15 @@ export default function Checkout() {
 
     setPaymentFile(file);
     setFilePreview(URL.createObjectURL(file));
+    // A new file invalidates any previously uploaded receipt path.
+    setUploadedReceipt(null);
   };
 
   // Handle validation errors on final submit by navigating to the step with errors
   const onInvalid = (fieldErrors) => {
     if (fieldErrors.full_name || fieldErrors.email || fieldErrors.phone) {
       setCurrentStep(1);
-    } else if (fieldErrors.address) {
+    } else if (fieldErrors.address || fieldErrors.shipping_code) {
       setCurrentStep(2);
     }
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -115,17 +176,25 @@ export default function Checkout() {
     setUploadError(null);
 
     try {
-      // 1. Upload payment screenshot
-      let uploaded;
-      try {
-        uploaded = await uploadPaymentScreenshot(paymentFile);
-      } catch (uploadErr) {
-        console.error('Payment screenshot upload failed');
-        setUploadError(uploadErr?.message || 'Failed to upload file. Please try again.');
-        return;
+      // 1. Upload payment screenshot (reuse the stored path on retry so a
+      // TOTAL_CHANGED resubmit never creates orphaned duplicate uploads).
+      let receiptPath = uploadedReceipt && uploadedReceipt.file === paymentFile
+        ? uploadedReceipt.path
+        : null;
+      if (!receiptPath) {
+        try {
+          const uploaded = await uploadPaymentScreenshot(paymentFile);
+          receiptPath = uploaded.path;
+          setUploadedReceipt({ file: paymentFile, path: receiptPath });
+        } catch (uploadErr) {
+          console.error('Payment screenshot upload failed');
+          setUploadError(uploadErr?.message || 'Failed to upload file. Please try again.');
+          return;
+        }
       }
 
-      // 2. Create order via Edge Function (pricing computed server-side)
+      // 2. Create order via Edge Function (pricing computed server-side).
+      // expected_total is only a race check against the server total.
       const contactInfo = {
         full_name: formData.full_name,
         email: formData.email,
@@ -142,24 +211,41 @@ export default function Checkout() {
           phone: formData.phone,
           address: formData.address,
         },
-        receipt_path: uploaded.path,
+        receipt_path: receiptPath,
+        shipping_code: formData.shipping_code,
+        expected_total: grandTotal,
       });
 
       // 3. Clear cart only on success and redirect — build confirmation from local state, no DB re-fetch
       clearCart();
       navigate('/order-confirmation', {
         state: {
-          order: { id: result.id, total_price: result.total_price, items: cartItems, address: formData.address },
+          order: { id: result.id, total_price: result.total_price, items: cartItems, address: formData.address, shipping_price: result.shipping_price, shipping_name: result.shipping_name },
           contactInfo,
           receiptUrl: result.receipt_signed_url ?? filePreview,
         },
       });
     } catch (err) {
+      // Price race: show the server total and require explicit acceptance.
+      // Never auto-resubmit; the user reviews and confirms first.
+      if (err?.code === 'TOTAL_CHANGED') {
+        setTotalChanged({ total_price: err.total_price });
+        loadRates();
+        return;
+      }
       console.error('Order submission failed');
       setUploadError(err?.message || 'Failed to place order. Please try again.');
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  // User explicitly accepts the server total from a 409: display and submit
+  // that total until the selection or cart changes (which clears it).
+  const acceptNewTotal = () => {
+    if (totalChanged?.total_price == null) return;
+    setAcceptedTotal(totalChanged.total_price);
+    setTotalChanged(null);
   };
   if (cartItems.length === 0) {
     return (
@@ -378,12 +464,81 @@ export default function Checkout() {
               </div>
 
               {/* Total display */}
-              <div className="pt-3 border-t border-neutral-200 flex justify-between items-baseline">
-                <span className="text-xs uppercase font-bold text-neutral-700">Total Price:</span>
-                <span className="font-serif text-xl font-bold text-[#1A1A1A]">
-                  {formatEGP(totalPrice)}
-                </span>
+              <div className="pt-3 border-t border-neutral-200 space-y-1.5">
+                <div className="flex justify-between items-baseline text-xs">
+                  <span className="uppercase font-bold text-neutral-700">Subtotal:</span>
+                  <span className="font-semibold text-neutral-900">{formatEGP(totalPrice)}</span>
+                </div>
+                <div className="flex justify-between items-baseline text-xs">
+                  <span className="uppercase font-bold text-neutral-700">Shipping:</span>
+                  {selectedRate ? (
+                    <span className="font-semibold text-neutral-900">
+                      {shippingCents === 0 ? 'Free' : formatEGP(selectedRate.price)}
+                    </span>
+                  ) : (
+                    <span className="text-neutral-400">Select a governorate</span>
+                  )}
+                </div>
+                <div className="flex justify-between items-baseline pt-1.5 border-t border-neutral-200">
+                  <span className="text-xs uppercase font-bold text-neutral-700">Total:</span>
+                  <span className="font-serif text-xl font-bold text-[#1A1A1A]">
+                    {formatEGP(grandTotal)}
+                  </span>
+                </div>
               </div>
+            </div>
+
+            {/* Governorate Select Field */}
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider text-neutral-700 mb-1.5">
+                Governorate *
+              </label>
+              {ratesLoading && (
+                <p className="text-xs text-neutral-400 mb-2">Loading delivery options…</p>
+              )}
+              {ratesError && (
+                <div className="p-3 bg-red-50 border border-red-200 text-red-600 text-xs rounded-[8px] flex items-center gap-2 mb-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span className="flex-1">{ratesError}</span>
+                  <button
+                    type="button"
+                    onClick={loadRates}
+                    className="font-semibold underline hover:text-red-800"
+                  >
+                    Retry
+                  </button>
+                </div>
+              )}
+              {!ratesLoading && !ratesError && rates.length === 0 && (
+                <p className="text-xs text-red-600 mb-2">
+                  Delivery is currently unavailable. Please try again later.
+                </p>
+              )}
+              <select
+                {...register('shipping_code')}
+                disabled={ratesUnusable}
+                className={`w-full px-4 py-3 text-sm bg-neutral-50 border rounded-[8px] focus:outline-none transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${errors.shipping_code ? 'border-red-400 bg-red-50/20' : 'border-neutral-200 focus:border-neutral-800'
+                  }`}
+              >
+                <option value="">Select governorate</option>
+                {rates.map((rate) => (
+                  <option key={rate.code} value={rate.code}>
+                    {rate.price === 0 ? `${rate.name_en} - Free` : `${rate.name_en} - ${formatEGP(rate.price)}`}
+                  </option>
+                ))}
+              </select>
+              {errors.shipping_code && (
+                <p className="text-xs text-red-500 mt-1 flex items-center gap-1">
+                  <AlertCircle className="w-3.5 h-3.5" />
+                  <span>{errors.shipping_code.message}</span>
+                </p>
+              )}
+              {selectionNotice && (
+                <p className="text-xs text-amber-600 mt-1">{selectionNotice}</p>
+              )}
+              <p className="text-[11px] text-neutral-400 mt-1">
+                Shipping fee is added to your order total.
+              </p>
             </div>
 
             {/* Address Input Field */}
@@ -420,7 +575,8 @@ export default function Checkout() {
               <button
                 type="button"
                 onClick={handleProceedToStep3}
-                className="bg-[#1A1A1A] hover:bg-neutral-800 text-white px-8 py-3.5 rounded-[8px] text-xs font-semibold uppercase tracking-widest flex items-center space-x-2 transition-all shadow-sm"
+                disabled={ratesUnusable}
+                className="bg-[#1A1A1A] hover:bg-neutral-800 text-white px-8 py-3.5 rounded-[8px] text-xs font-semibold uppercase tracking-widest flex items-center space-x-2 transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <span>Continue to Payment Proof</span>
                 <ArrowRight className="w-4 h-4" />
@@ -437,7 +593,7 @@ export default function Checkout() {
                 Step 3: Payment Proof
               </h2>
               <p className="text-xs text-neutral-500 mt-1">
-                Please transfer the total amount ({formatEGP(totalPrice)}) and upload the payment receipt or transaction screenshot.
+                Please transfer the total amount ({formatEGP(grandTotal)}) and upload the payment receipt or transaction screenshot.
               </p>
             </div>
 
@@ -464,7 +620,7 @@ export default function Checkout() {
                 )}
                 <div>
                   <span className="text-neutral-400 block text-[10px] uppercase">Exact Total</span>
-                  <span className="font-bold text-neutral-900">{formatEGP(totalPrice)}</span>
+                  <span className="font-bold text-neutral-900">{formatEGP(grandTotal)}</span>
                 </div>
               </div>
             </div>
@@ -545,7 +701,7 @@ export default function Checkout() {
 
               <button
                 type="button"
-                disabled={isSubmitting}
+                disabled={isSubmitting || ratesUnusable}
                 onClick={handleSubmit(onFinalSubmit, onInvalid)}
                 className="bg-[#1A1A1A] hover:bg-neutral-800 text-white px-8 py-4 rounded-[8px] text-xs font-semibold uppercase tracking-widest flex items-center space-x-2 transition-all shadow-md active:scale-[0.99] disabled:opacity-50 disabled:cursor-not-allowed"
               >
@@ -557,11 +713,27 @@ export default function Checkout() {
                 ) : (
                   <>
                     <ShieldCheck className="w-4 h-4" />
-                    <span>Place Order • {formatEGP(totalPrice)}</span>
+                    <span>Place Order • {formatEGP(grandTotal)}</span>
                   </>
                 )}
               </button>
             </div>
+
+            {/* Total-changed banner: explicit user acceptance required */}
+            {totalChanged && (
+              <div className="p-3 bg-amber-50 border border-amber-200 text-amber-800 text-xs rounded-[8px] flex flex-col gap-2">
+                <span>
+                  The order total has changed to {formatEGP(totalChanged.total_price)}. Please review and confirm.
+                </span>
+                <button
+                  type="button"
+                  onClick={acceptNewTotal}
+                  className="self-start bg-amber-700 hover:bg-amber-800 text-white px-4 py-2 rounded-[8px] text-[11px] font-semibold uppercase tracking-wider transition-all"
+                >
+                  Accept new total
+                </button>
+              </div>
+            )}
 
           </div>
         )}

@@ -165,7 +165,7 @@ export default function Cart() {
               </div>
               <div className="flex justify-between">
                 <span>Estimated Shipping</span>
-                <span className="text-emerald-700 font-medium">Complimentary</span>
+                <span className="text-neutral-500 font-medium">Calculated at checkout</span>
               </div>
               <div className="flex justify-between">
                 <span>Maison Discovery Samples</span>

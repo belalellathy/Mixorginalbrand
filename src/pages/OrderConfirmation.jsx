@@ -99,18 +99,45 @@ export default function OrderConfirmation() {
             <span className="text-[11px] font-bold uppercase tracking-wider text-neutral-400 block mb-1">
               Shipping Address
             </span>
-            <p className="font-medium text-neutral-800 leading-snug">{order.address}</p>
+            <p className="font-medium text-neutral-800 leading-snug">
+              {order.address}{order.shipping_name ? `, ${order.shipping_name}` : ''}
+            </p>
           </div>
         )}
 
-        {/* Total Price */}
-        {order.total_price != null && (
-          <div className="flex justify-between items-center pt-3 border-t border-neutral-200 text-xs text-neutral-700 font-medium">
-            <span className="text-xs uppercase font-bold text-neutral-700">Total Paid:</span>
-            <span className="font-serif text-lg font-bold text-neutral-900">
-              {formatEGP(order.total_price)}
-            </span>
-          </div>
+        {/* Total Price: Subtotal + Shipping + Total when the server sent
+            shipping columns, total only for legacy orders without them.
+            Never truthiness: a 0 shipping fee must still render. */}
+        {order.shipping_price != null ? (
+          <>
+            <div className="flex justify-between items-center pt-3 border-t border-neutral-200/60 text-xs text-neutral-600">
+              <span className="uppercase font-bold">Subtotal:</span>
+              <span className="font-semibold text-neutral-900">
+                {formatEGP((Math.round(order.total_price * 100) - Math.round(order.shipping_price * 100)) / 100)}
+              </span>
+            </div>
+            <div className="flex justify-between items-center text-xs text-neutral-600">
+              <span className="uppercase font-bold">Shipping:</span>
+              <span className="font-semibold text-neutral-900">
+                {Number(order.shipping_price) === 0 ? 'Free' : formatEGP(order.shipping_price)}
+              </span>
+            </div>
+            <div className="flex justify-between items-center pt-3 border-t border-neutral-200 text-xs text-neutral-700 font-medium">
+              <span className="text-xs uppercase font-bold text-neutral-700">Total Paid:</span>
+              <span className="font-serif text-lg font-bold text-neutral-900">
+                {formatEGP(order.total_price)}
+              </span>
+            </div>
+          </>
+        ) : (
+          order.total_price != null && (
+            <div className="flex justify-between items-center pt-3 border-t border-neutral-200 text-xs text-neutral-700 font-medium">
+              <span className="text-xs uppercase font-bold text-neutral-700">Total Paid:</span>
+              <span className="font-serif text-lg font-bold text-neutral-900">
+                {formatEGP(order.total_price)}
+              </span>
+            </div>
+          )
         )}
 
         {/* Payment Receipt (blob preview does not survive reload; hide on load failure) */}
