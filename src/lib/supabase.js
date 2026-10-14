@@ -53,6 +53,9 @@ export async function uploadPaymentScreenshot(file) {
   }
 
   if (!response.ok) {
+    if (response.status === 429) {
+      throw new Error(body.error || 'Too many uploads. Please wait a few minutes and try again.');
+    }
     throw new Error(body.error || 'Upload failed');
   }
 
@@ -201,12 +204,16 @@ export async function createOrder({ items, contactInfo, receipt_path }) {
 
     if (error) {
       if (error.context instanceof Response) {
+        const status = error.context.status;
         let message = 'Failed to place order';
         try {
           const body = await error.context.json();
           if (body?.error) message = body.error;
         } catch {
           // Keep default message when the error body is not JSON.
+        }
+        if (status === 429 && message === 'Failed to place order') {
+          message = 'Too many orders. Please wait a few minutes and try again.';
         }
         throw new Error(message);
       }

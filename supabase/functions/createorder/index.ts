@@ -29,6 +29,18 @@ function json(body: unknown, status = 200) {
 }
 const errorResponse = (message: string, status = 400) => json({ error: message }, status);
 
+// Extract client IP behind proxies/CDN. cf-connecting-ip first, then x-forwarded-for.
+const getClientIp = (req: Request): string => {
+  const cfIp = req.headers.get("cf-connecting-ip")?.trim();
+  if (cfIp) return cfIp;
+  const forwarded = req.headers.get("x-forwarded-for");
+  if (forwarded) {
+    const first = forwarded.split(",")[0]?.trim();
+    if (first) return first;
+  }
+  return "unknown";
+};
+
 // Non-empty trimmed string, truncated to `max`; null if not a usable string.
 const text = (v: unknown, max: number): string | null =>
   typeof v === "string" && v.trim().length > 0 ? v.trim().slice(0, max) : null;
@@ -38,6 +50,24 @@ type Line = { product_id: string | number; quantity: number; unit_price: number;
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return errorResponse("Method not allowed", 405);
+
+  // IP-based rate limiting: 5 requests per 10 minutes, before any business logic.
+  const clientIp = getClientIp(req);
+  try {
+    const { data: allowed, error: rateLimitError } = await supabase.rpc("check_rate_limit", {
+      p_ip: clientIp,
+      p_endpoint: "createorder",
+      p_max_requests: 5,
+      p_window_seconds: 600,
+    });
+    if (rateLimitError) {
+      console.error("check_rate_limit error:", rateLimitError);
+    } else if (allowed === false) {
+      return errorResponse("Too many orders. Please wait a few minutes and try again.", 429);
+    }
+  } catch (e) {
+    console.error("check_rate_limit error:", e);
+  }
 
   // Stock we have reserved so far, so any later failure can put it back.
   const reserved: Line[] = [];
