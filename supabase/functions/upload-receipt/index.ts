@@ -15,6 +15,18 @@ function respond(body: object, status = 200) {
   });
 }
 
+// Extract client IP behind proxies/CDN. cf-connecting-ip first, then x-forwarded-for.
+function getClientIp(req: Request): string {
+  const cfIp = req.headers.get("cf-connecting-ip")?.trim();
+  if (cfIp) return cfIp;
+  const forwarded = req.headers.get("x-forwarded-for");
+  if (forwarded) {
+    const first = forwarded.split(",")[0]?.trim();
+    if (first) return first;
+  }
+  return "unknown";
+}
+
 function detectImageType(bytes: Uint8Array): { ext: string; mime: string } | null {
   if (bytes.length < 12) return null;
 
@@ -60,6 +72,34 @@ serve(async (req: Request) => {
   }
 
   try {
+    const supabaseUrl = Deno.env.get("SUPABASE_URL");
+    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+
+    if (!supabaseUrl || !supabaseServiceKey) {
+      console.error("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY");
+      return respond({ error: "Server configuration error" }, 500);
+    }
+
+    const supabase = createClient(supabaseUrl, supabaseServiceKey);
+
+    // IP-based rate limiting: 8 requests per 10 minutes, before any file validation.
+    try {
+      const clientIp = getClientIp(req);
+      const { data: allowed, error: rateLimitError } = await supabase.rpc("check_rate_limit", {
+        p_ip: clientIp,
+        p_endpoint: "upload-receipt",
+        p_max_requests: 8,
+        p_window_seconds: 600,
+      });
+      if (rateLimitError) {
+        console.error("check_rate_limit error:", rateLimitError);
+      } else if (allowed === false) {
+        return respond({ error: "Too many uploads. Please wait a few minutes and try again." }, 429);
+      }
+    } catch (e) {
+      console.error("check_rate_limit error:", e);
+    }
+
     const formData = await req.formData();
     const file = formData.get("file");
 
@@ -85,16 +125,6 @@ serve(async (req: Request) => {
         400
       );
     }
-
-    const supabaseUrl = Deno.env.get("SUPABASE_URL");
-    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-
-    if (!supabaseUrl || !supabaseServiceKey) {
-      console.error("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY");
-      return respond({ error: "Server configuration error" }, 500);
-    }
-
-    const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
     const fileName = `${crypto.randomUUID()}.${detected.ext}`;
     const filePath = `receipts/${fileName}`;
