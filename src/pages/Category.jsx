@@ -5,6 +5,7 @@ import { fetchProductsByCategorySlug } from '../lib/supabase';
 import { getErrorMessage } from '../lib/utils';
 import ProductCard from '../components/ProductCard';
 import { ProductCardSkeleton } from '../components/ui/Skeleton';
+import NotFound from './NotFound';
 
 export default function Category() {
   const { slug } = useParams();
@@ -13,6 +14,7 @@ export default function Category() {
   const [sortBy, setSortBy] = useState('default');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [notFound, setNotFound] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -21,9 +23,9 @@ export default function Category() {
       try {
         setLoading(true);
         setError(null);
+        setNotFound(false);
 
         const res = await fetchProductsByCategorySlug(slug, sortBy);
-        if (res.error) throw res.error;
 
         if (isMounted) {
           setCategory(res.category);
@@ -32,7 +34,11 @@ export default function Category() {
       } catch (err) {
         console.error('Error fetching category products:', err);
         if (isMounted) {
-          setError(getErrorMessage(err, 'Failed to load products. Please try again.'));
+          if (err?.code === 'PGRST116') {
+            setNotFound(true);
+          } else {
+            setError(getErrorMessage(err, 'Failed to load products. Please try again.'));
+          }
         }
       } finally {
         if (isMounted) setLoading(false);
@@ -60,6 +66,10 @@ export default function Category() {
   const accentColor = category?.accent_color || '#1A1A1A';
   const textColor = getContrastColor(accentColor);
   const isLightBg = textColor === '#1A1A1A';
+
+  if (notFound) {
+    return <NotFound />;
+  }
 
   return (
     <div className="pb-24">

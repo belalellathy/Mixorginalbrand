@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Star, StarHalf, Plus } from 'lucide-react';
+import { Plus } from 'lucide-react';
 import { useCartStore } from '../store/cartStore';
 import { formatEGP } from '../lib/format';
 import { getCategoryBySlug } from '../config/categories';
@@ -19,7 +19,7 @@ function accentForCategoryId(categoryId) {
   return CATEGORY_ACCENTS[category.slug] || '#1A1A1A';
 }
 
-export default function ProductCard({ product, accentColor, avg_rating, review_count }) {
+export default function ProductCard({ product, accentColor }) {
   const [isAdded, setIsAdded] = useState(false);
   const [stockMessage, setStockMessage] = useState('');
   const addToCart = useCartStore((state) => state.addToCart);
@@ -53,10 +53,6 @@ export default function ProductCard({ product, accentColor, avg_rating, review_c
     setIsAdded(true);
     setTimeout(() => setIsAdded(false), 1200);
   };
-
-  // Ratings come with the product from products_with_ratings — no extra fetch.
-  const avgRating = Number(product?.avg_rating ?? avg_rating) || 0;
-  const reviewCount = Number(product?.review_count ?? review_count) || 0;
 
   return (
     <div className="group relative bg-white rounded-[12px] p-3 sm:p-4 shadow-soft hover:shadow-soft-hover transition-all duration-300 hover:scale-[1.02] flex flex-col justify-between border border-neutral-100/80">
@@ -112,41 +108,6 @@ export default function ProductCard({ product, accentColor, avg_rating, review_c
               {product.name}
             </h3>
           </Link>
-
-          {/* Star Rating Display (real avg_rating) */}
-          <div className="flex items-center space-x-1 mb-2">
-            {reviewCount > 0 ? (
-              <>
-                {[...Array(5)].map((_, i) => {
-                  const starNum = i + 1;
-                  if (avgRating >= starNum) {
-                    return (
-                      <Star
-                        key={i}
-                        className="w-3.5 h-3.5 fill-amber-400 text-amber-400"
-                      />
-                    );
-                  }
-                  if (avgRating >= starNum - 0.5) {
-                    return (
-                      <StarHalf
-                        key={i}
-                        className="w-3.5 h-3.5 fill-amber-400 text-amber-400"
-                      />
-                    );
-                  }
-                  return <Star key={i} className="w-3.5 h-3.5 text-neutral-300" />;
-                })}
-                <span className="text-xs text-neutral-400 font-medium ml-1">
-                  ({avgRating.toFixed(1)}) ({reviewCount})
-                </span>
-              </>
-            ) : (
-              <span className="text-xs text-neutral-400 font-medium">
-                No reviews yet
-              </span>
-            )}
-          </div>
         </div>
 
         {/* Price & Add to Cart */}

@@ -7,30 +7,60 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 /**
  * Upload payment screenshot via the `upload-receipt` Edge Function.
+ * Client type/size checks below are UX-only; the server sniffs magic bytes,
+ * enforces 5 MB, and generates the receipt path.
  */
+export const ALLOWED_RECEIPT_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+
+export const MAX_RECEIPT_SIZE_BYTES = 5 * 1024 * 1024;
+
 export async function uploadPaymentScreenshot(file) {
   if (!file) throw new Error('No file provided');
+
+  if (!ALLOWED_RECEIPT_TYPES.includes(file.type)) {
+    throw new Error('Unsupported image type. Use JPG, PNG or WEBP.');
+  }
+
+  if (file.size > MAX_RECEIPT_SIZE_BYTES) {
+    throw new Error('File too large. Maximum size is 5MB.');
+  }
 
   const formData = new FormData();
   formData.append('file', file);
 
-  const response = await fetch(
-    `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/upload-receipt`,
-    {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-      },
-      body: formData,
-    }
-  );
-
-  const result = await response.json();
-  if (!response.ok) {
-    throw new Error(result.error || 'Failed to upload file. Please try again.');
+  let response;
+  try {
+    response = await fetch(
+      `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/upload-receipt`,
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+          'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY,
+        },
+        body: formData,
+      }
+    );
+  } catch {
+    throw new Error('Network error. Please try again.');
   }
 
-  return { path: result.path };
+  let body = {};
+  try {
+    body = await response.json();
+  } catch {
+    body = {};
+  }
+
+  if (!response.ok) {
+    throw new Error(body.error || 'Upload failed');
+  }
+
+  if (!body.path || typeof body.path !== 'string') {
+    throw new Error('Upload failed');
+  }
+
+  return { path: body.path };
 }
 
 /**
@@ -78,7 +108,7 @@ export async function fetchCategoryBySlug(slug) {
  */
 export async function fetchFeaturedProducts() {
   const { data, error } = await supabase
-    .from('products_with_ratings')
+    .from('products')
     .select('*, categories(name, slug, accent_color)')
     .eq('is_featured', true);
 
@@ -99,7 +129,7 @@ export async function fetchProductsByCategorySlug(slug, sortBy = 'default') {
   if (catError) throw catError;
 
   let query = supabase
-    .from('products_with_ratings')
+    .from('products')
     .select('*, categories(name, slug, accent_color)')
     .eq('category_id', category.id);
 
@@ -120,7 +150,7 @@ export async function fetchProductsByCategorySlug(slug, sortBy = 'default') {
  */
 export async function fetchProductById(id) {
   const { data, error } = await supabase
-    .from('products_with_ratings')
+    .from('products')
     .select('*, categories(id, name, slug, accent_color)')
     .eq('id', id)
     .single();
@@ -148,7 +178,7 @@ export async function fetchProductImages(productId) {
  */
 export async function fetchRelatedProducts(categoryId, currentProductId, limit = 4) {
   const { data, error } = await supabase
-    .from('products_with_ratings')
+    .from('products')
     .select('*, categories(name, slug, accent_color)')
     .eq('category_id', categoryId)
     .neq('id', currentProductId)
@@ -164,21 +194,32 @@ export async function fetchRelatedProducts(categoryId, currentProductId, limit =
  * unit_price or total_price.
  */
 export async function createOrder({ items, contactInfo, receipt_path }) {
-  const response = await fetch(
-    `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/createorder`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-      },
-      body: JSON.stringify({ items, contactInfo, receipt_path }),
-    }
-  );
+  try {
+    const { data, error } = await supabase.functions.invoke('createorder', {
+      body: { items, contactInfo, receipt_path },
+    });
 
-  const result = await response.json();
-  if (!response.ok) throw new Error(result.error || 'Order failed');
-  return result; // { id, total_price }
+    if (error) {
+      if (error.context instanceof Response) {
+        let message = 'Failed to place order';
+        try {
+          const body = await error.context.json();
+          if (body?.error) message = body.error;
+        } catch {
+          // Keep default message when the error body is not JSON.
+        }
+        throw new Error(message);
+      }
+      throw new Error('Network error. Please try again.');
+    }
+
+    if (!data?.id) throw new Error('Failed to place order');
+    // receipt_signed_url is absent on the old function; default to null.
+    return { id: data.id, total_price: data.total_price, receipt_signed_url: data.receipt_signed_url ?? null };
+  } catch (err) {
+    if (err instanceof Error) throw err;
+    throw new Error('Network error. Please try again.');
+  }
 }
 
 /**
@@ -194,7 +235,7 @@ export async function searchProducts(query) {
   if (!sanitized) return [];
 
   const { data, error } = await supabase
-    .from('products_with_ratings')
+    .from('products')
     .select('*, categories(name, slug, accent_color)')
     .or(`name.ilike.%${sanitized}%,description.ilike.%${sanitized}%`)
     .order('name');
@@ -204,85 +245,13 @@ export async function searchProducts(query) {
 }
 
 /**
- * Fetch reviews for a product
+ * Fetch bestsellers
  */
-export async function fetchProductReviews(productId) {
+export async function fetchBestsellers(limit = 8) {
   const { data, error } = await supabase
-    .from('reviews')
-    .select('*')
-    .eq('product_id', productId)
-    .order('created_at', { ascending: false });
-
-  if (error) throw error;
-  return data || [];
-}
-
-/**
- * Submit a review via the `submit-review` Edge Function.
- * Verifies Turnstile CAPTCHA server-side and inserts with the service role key.
- */
-export async function submitReview({
-  product_id,
-  productId,
-  name,
-  full_name,
-  fullName,
-  rating,
-  comment,
-}) {
-  const payload = {
-    product_id: product_id ?? productId,
-    name: name ?? full_name ?? fullName,
-    rating,
-    comment,
-  };
-
-  const response = await fetch(
-    `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/submit-review`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-      },
-      body: JSON.stringify(payload),
-    }
-  );
-
-  const result = await response.json();
-  if (!response.ok) throw new Error(result.error || 'Failed to submit review');
-  return result;
-}
-
-/**
- * Fetch product average rating
- */
-export async function fetchProductRating(productId) {
-  const { data, error } = await supabase
-    .from('reviews')
-    .select('rating')
-    .eq('product_id', productId);
-
-  if (error) throw error;
-
-  if (!data || data.length === 0) return { avg_rating: 0, review_count: 0 };
-
-  const avg = data.reduce((sum, r) => sum + r.rating, 0) / data.length;
-  return {
-    avg_rating: Math.round(avg * 10) / 10,
-    review_count: data.length,
-  };
-}
-
-/**
- * Fetch bestsellers sorted by rating (replaces fetchBestsellers)
- */
-export async function fetchBestsellersByRating(limit = 8) {
-  const { data, error } = await supabase
-    .from('products_with_ratings')
+    .from('products')
     .select('*, categories(name, slug, accent_color)')
-    .order('avg_rating', { ascending: false })
-    .order('review_count', { ascending: false })
+    .order('created_at', { ascending: false })
     .limit(limit);
 
   if (error) throw error;

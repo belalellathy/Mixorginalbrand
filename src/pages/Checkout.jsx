@@ -5,7 +5,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { Check, Upload, ArrowRight, ArrowLeft, ShieldCheck, Loader2, AlertCircle } from 'lucide-react';
 import { useCartStore } from '../store/cartStore';
-import { uploadPaymentScreenshot, createOrder, fetchPaymentSettings } from '../lib/supabase';
+import { uploadPaymentScreenshot, createOrder, fetchPaymentSettings, ALLOWED_RECEIPT_TYPES, MAX_RECEIPT_SIZE_BYTES } from '../lib/supabase';
 import { getErrorMessage } from '../lib/utils';
 import { formatEGP } from '../lib/format';
 
@@ -30,6 +30,11 @@ export default function Checkout() {
       .then(setPaymentSettings)
       .catch(() => setPaymentSettings(null));
   }, []);
+
+  // Revoke the blob preview URL on replace/unmount; blob URLs do not survive reload.
+  useEffect(() => () => {
+    if (filePreview && filePreview.startsWith('blob:')) URL.revokeObjectURL(filePreview);
+  }, [filePreview]);
 
   const { cartItems, totalPrice, clearCart } = useCartStore();
   const navigate = useNavigate();
@@ -74,27 +79,18 @@ export default function Checkout() {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // Extension allowlist (mirrors uploadPaymentScreenshot server-side check)
-    const allowedExtensions = ['jpg', 'jpeg', 'png', 'webp'];
-    const nameParts = file.name.split('.');
-    const ext = nameParts.pop().toLowerCase();
-    if (nameParts.length < 1 || !allowedExtensions.includes(ext)) {
+    if (!ALLOWED_RECEIPT_TYPES.includes(file.type)) {
       setUploadError('Invalid file type. Please upload a JPG, PNG, or WebP image.');
       return;
     }
 
-    // Limit file size to 5MB
-    if (file.size > 5 * 1024 * 1024) {
+    if (file.size > MAX_RECEIPT_SIZE_BYTES) {
       setUploadError('File too large. Maximum size is 5MB.');
       return;
     }
 
     setPaymentFile(file);
-    const reader = new FileReader();
-    reader.onload = () => {
-      setFilePreview(reader.result);
-    };
-    reader.readAsDataURL(file);
+    setFilePreview(URL.createObjectURL(file));
   };
 
   // Handle validation errors on final submit by navigating to the step with errors
@@ -121,12 +117,11 @@ export default function Checkout() {
 
     try {
       // 1. Upload payment screenshot
-      let path;
-      let signedUrl;
+      let uploaded;
       try {
-        ({ path, signedUrl } = await uploadPaymentScreenshot(paymentFile));
+        uploaded = await uploadPaymentScreenshot(paymentFile);
       } catch (uploadErr) {
-        console.error('Upload failed:', uploadErr);
+        console.error('Payment screenshot upload failed');
         setUploadError(getErrorMessage(uploadErr, 'Failed to upload file. Please try again.'));
         return;
       }
@@ -137,7 +132,7 @@ export default function Checkout() {
         email: formData.email,
         phone: formData.phone,
       };
-      const { id, total_price } = await createOrder({
+      const result = await createOrder({
         items: cartItems.map((item) => ({
           product_id: item.product.id,
           quantity: item.quantity,
@@ -148,20 +143,20 @@ export default function Checkout() {
           phone: formData.phone,
           address: formData.address,
         },
-        receipt_path: path,
+        receipt_path: uploaded.path,
       });
 
-      // 3. Clear cart and redirect — build confirmation from local state, no DB re-fetch
+      // 3. Clear cart only on success and redirect — build confirmation from local state, no DB re-fetch
       clearCart();
       navigate('/order-confirmation', {
         state: {
-          order: { id, total_price, items: cartItems },
+          order: { id: result.id, total_price: result.total_price, items: cartItems, address: formData.address },
           contactInfo,
-          receiptUrl: signedUrl,
+          receiptUrl: result.receipt_signed_url ?? filePreview,
         },
       });
     } catch (err) {
-      console.error('Order submission failed:', err);
+      console.error('Order submission failed');
       setUploadError(getErrorMessage(err, 'Failed to place order. Please try again.'));
     } finally {
       setIsSubmitting(false);
@@ -485,7 +480,7 @@ export default function Checkout() {
                 <input
                   type="file"
                   id="screenshot-upload"
-                  accept=".jpg,.jpeg,.png,.webp"
+                  accept="image/jpeg,image/png,image/webp"
                   onChange={handleFileChange}
                   className="hidden"
                 />

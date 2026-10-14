@@ -104,7 +104,7 @@ export default function OrderConfirmation() {
         )}
 
         {/* Total Price */}
-        {order.total_price && (
+        {order.total_price != null && (
           <div className="flex justify-between items-center pt-3 border-t border-neutral-200 text-xs text-neutral-700 font-medium">
             <span className="text-xs uppercase font-bold text-neutral-700">Total Paid:</span>
             <span className="font-serif text-lg font-bold text-neutral-900">
@@ -113,7 +113,7 @@ export default function OrderConfirmation() {
           </div>
         )}
 
-        {/* Payment Receipt */}
+        {/* Payment Receipt (blob preview does not survive reload; hide on load failure) */}
         {receiptUrl && (
           <div className="pt-3 border-t border-neutral-200/60">
             <span className="text-[11px] font-bold uppercase tracking-wider text-neutral-400 block mb-2">
@@ -122,6 +122,7 @@ export default function OrderConfirmation() {
             <img
               src={receiptUrl}
               alt="Payment receipt"
+              onError={(e) => { e.currentTarget.style.display = 'none'; }}
               className="w-full max-h-64 object-contain rounded-[8px] border border-neutral-200 bg-white"
             />
           </div>
