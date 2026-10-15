@@ -1,10 +1,33 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-};
+// Allowlist only: only the storefront origins below may read responses.
+// A wildcard would let any site read responses, so it is never used.
+const PROD_ORIGIN = "https://mixorginalbrand.vercel.app";
+const DEV_ORIGIN = "http://localhost:3000"; // port mirrors vite.config.js server.port
+
+function getAllowedOrigins(): string[] {
+  const extra = (Deno.env.get("ALLOWED_ORIGINS") ?? "")
+    .split(",")
+    .map((o) => o.trim())
+    .filter((o) => o.length > 0);
+  return [PROD_ORIGIN, DEV_ORIGIN, ...extra];
+}
+
+// Computed per request because Access-Control-Allow-Origin must echo the
+// caller's Origin exactly when allowed. Vary: Origin is always set so
+// caches key responses by Origin.
+function corsHeadersFor(req: Request): Record<string, string> {
+  const base: Record<string, string> = {
+    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Vary": "Origin",
+  };
+  const origin = req.headers.get("origin");
+  if (origin && getAllowedOrigins().includes(origin)) {
+    return { ...base, "Access-Control-Allow-Origin": origin };
+  }
+  return base;
+}
 
 const BUCKET = "payment-screenshots";
 // Only paths our own upload code can produce: receipts/<uuid>.<ext>
@@ -21,14 +44,6 @@ const supabase = createClient(
   Deno.env.get("SUPABASE_URL")!,
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
 );
-
-function json(body: unknown, status = 200) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { ...corsHeaders, "Content-Type": "application/json" },
-  });
-}
-const errorResponse = (message: string, status = 400) => json({ error: message }, status);
 
 // Extract client IP behind proxies/CDN. cf-connecting-ip first, then x-forwarded-for.
 const getClientIp = (req: Request): string => {
@@ -49,6 +64,15 @@ const text = (v: unknown, max: number): string | null =>
 type Line = { product_id: string | number; quantity: number; unit_price: number; name: string };
 
 Deno.serve(async (req: Request) => {
+  const corsHeaders = corsHeadersFor(req);
+  const json = (body: unknown, status = 200) => {
+    return new Response(JSON.stringify(body), {
+      status,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  };
+  const errorResponse = (message: string, status = 400) => json({ error: message }, status);
+
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return errorResponse("Method not allowed", 405);
 
