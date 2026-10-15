@@ -158,6 +158,12 @@ Deno.serve(async (req: Request) => {
       return errorResponse("Contact information is incomplete");
     }
     if (!EMAIL_RE.test(email)) return errorResponse("Invalid email address");
+    // Digit count after stripping separators, so formatted input like
+    // "+20 10 1234 5678" is evaluated on its digits, not its length.
+    const phoneDigits = phone.replace(/\D/g, "");
+    if (phoneDigits.length < 7 || phoneDigits.length > 15) {
+      return errorResponse("Invalid phone number");
+    }
 
     // ---- 3. Validate receipt: strict format + file exists (F3) ----
     if (typeof receipt_path !== "string" || !RECEIPT_RE.test(receipt_path)) {

@@ -12,7 +12,13 @@ import { formatEGP } from '../lib/format';
 const checkoutSchema = z.object({
   full_name: z.string().min(3, 'Full name must be at least 3 characters'),
   email: z.string().email('Please enter a valid email address'),
-  phone: z.string().min(8, 'Please enter a valid phone number (at least 8 digits)'),
+  phone: z.string().refine(
+    (v) => {
+      const digits = v.replace(/\D/g, "");
+      return digits.length >= 7 && digits.length <= 15;
+    },
+    "Please enter a valid phone number (7-15 digits)",
+  ),
   address: z.string().min(10, 'Please provide a complete delivery address (minimum 10 characters)'),
   shipping_code: z.string().min(1, 'Select a governorate'),
 });
@@ -396,7 +402,7 @@ export default function Checkout() {
                 </label>
                 <input
                   type="tel"
-                  placeholder="+1 (555) 019-2834"
+                  placeholder="+20 10 1234 5678"
                   {...register('phone')}
                   className={`w-full px-4 py-3 text-sm bg-neutral-50 border rounded-[8px] focus:outline-none transition-colors ${errors.phone ? 'border-red-400 bg-red-50/20' : 'border-neutral-200 focus:border-neutral-800'
                     }`}
