@@ -1,19 +1,33 @@
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-};
+const PROD_ORIGIN = "https://mixorginalbrand.vercel.app";
+const DEV_ORIGIN = "http://localhost:3000"; // port mirrors vite.config.js server.port
+
+function getAllowedOrigins(): string[] {
+  const extra = (Deno.env.get("ALLOWED_ORIGINS") ?? "")
+    .split(",")
+    .map((o) => o.trim())
+    .filter((o) => o.length > 0);
+  return [PROD_ORIGIN, DEV_ORIGIN, ...extra];
+}
+
+// Echo the request Origin only when allowlisted; otherwise omit
+// Access-Control-Allow-Origin entirely (never a wildcard) so unlisted
+// browsers cannot read responses. Vary: Origin is always set so caches key on it.
+function corsHeadersFor(req: Request): Record<string, string> {
+  const base: Record<string, string> = {
+    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+    "Vary": "Origin",
+  };
+  const origin = req.headers.get("origin");
+  if (origin && getAllowedOrigins().includes(origin)) {
+    return { ...base, "Access-Control-Allow-Origin": origin };
+  }
+  return base;
+}
 
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
-
-function respond(body: object, status = 200) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { ...corsHeaders, "Content-Type": "application/json" },
-  });
-}
 
 // Extract client IP behind proxies/CDN. cf-connecting-ip first, then x-forwarded-for.
 function getClientIp(req: Request): string {
@@ -63,6 +77,14 @@ function detectImageType(bytes: Uint8Array): { ext: string; mime: string } | nul
 }
 
 serve(async (req: Request) => {
+  const corsHeaders = corsHeadersFor(req);
+  const respond = (body: object, status = 200): Response => {
+    return new Response(JSON.stringify(body), {
+      status,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  };
+
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
