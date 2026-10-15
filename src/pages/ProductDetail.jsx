@@ -296,7 +296,7 @@ export default function ProductDetail() {
             <div className="border-t border-neutral-100 pt-6 space-y-3 text-xs text-neutral-500">
               <div className="flex items-center space-x-2.5">
                 <Truck className="w-4 h-4 text-neutral-700" />
-                <span>Complimentary express delivery on all luxury items.</span>
+                <span>Nationwide delivery on all luxury items.</span>
               </div>
               <div className="flex items-center space-x-2.5">
                 <ShieldCheck className="w-4 h-4 text-neutral-700" />

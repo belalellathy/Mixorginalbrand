@@ -252,7 +252,7 @@ export default function Home() {
               </div>
               <div>
                 <h4 className="font-serif text-base font-semibold text-neutral-900 mb-1">
-                  Complimentary Delivery
+                  Nationwide Delivery
                 </h4>
                 <p className="text-xs text-neutral-500 leading-relaxed">
                   Fast, climate-controlled shipping on all orders nationwide.
