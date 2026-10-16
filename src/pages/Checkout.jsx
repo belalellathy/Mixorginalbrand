@@ -340,7 +340,21 @@ export default function Checkout() {
       </div>
 
       {/* Main Multi-Step Form Card */}
-      <div className="bg-white rounded-[12px] p-6 sm:p-10 shadow-soft border border-neutral-100">
+      <form
+        onSubmit={(e) => {
+          if (currentStep === 1) {
+            e.preventDefault();
+            handleProceedToStep2();
+          } else if (currentStep === 2) {
+            e.preventDefault();
+            handleProceedToStep3();
+          } else {
+            handleSubmit(onFinalSubmit, onInvalid)(e);
+          }
+        }}
+        noValidate
+        className="bg-white rounded-[12px] p-6 sm:p-10 shadow-soft border border-neutral-100"
+      >
 
         {/* STEP 1: Contact Information */}
         {currentStep === 1 && (
@@ -357,18 +371,20 @@ export default function Checkout() {
             <div className="space-y-4">
               {/* Full Name */}
               <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-neutral-700 mb-1.5">
+                <label htmlFor="full_name" className="block text-xs font-semibold uppercase tracking-wider text-neutral-700 mb-1.5">
                   Full Name *
                 </label>
                 <input
                   type="text"
+                  id="full_name"
                   placeholder="e.g. Eleanor Vance"
                   {...register('full_name')}
+                  aria-describedby={errors.full_name ? 'full_name-error' : undefined}
                   className={`w-full px-4 py-3 text-sm bg-neutral-50 border rounded-[8px] focus:outline-none transition-colors ${errors.full_name ? 'border-red-400 bg-red-50/20' : 'border-neutral-200 focus:border-neutral-800'
                     }`}
                 />
                 {errors.full_name && (
-                  <p className="text-xs text-red-500 mt-1 flex items-center gap-1">
+                  <p id="full_name-error" role="alert" className="text-xs text-red-500 mt-1 flex items-center gap-1">
                     <AlertCircle className="w-3.5 h-3.5" />
                     <span>{errors.full_name.message}</span>
                   </p>
@@ -377,18 +393,20 @@ export default function Checkout() {
 
               {/* Email Address */}
               <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-neutral-700 mb-1.5">
+                <label htmlFor="email" className="block text-xs font-semibold uppercase tracking-wider text-neutral-700 mb-1.5">
                   Email Address *
                 </label>
                 <input
                   type="email"
+                  id="email"
                   placeholder="eleanor.vance@example.com"
                   {...register('email')}
+                  aria-describedby={errors.email ? 'email-error' : undefined}
                   className={`w-full px-4 py-3 text-sm bg-neutral-50 border rounded-[8px] focus:outline-none transition-colors ${errors.email ? 'border-red-400 bg-red-50/20' : 'border-neutral-200 focus:border-neutral-800'
                     }`}
                 />
                 {errors.email && (
-                  <p className="text-xs text-red-500 mt-1 flex items-center gap-1">
+                  <p id="email-error" role="alert" className="text-xs text-red-500 mt-1 flex items-center gap-1">
                     <AlertCircle className="w-3.5 h-3.5" />
                     <span>{errors.email.message}</span>
                   </p>
@@ -397,18 +415,20 @@ export default function Checkout() {
 
               {/* Phone Number */}
               <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-neutral-700 mb-1.5">
+                <label htmlFor="phone" className="block text-xs font-semibold uppercase tracking-wider text-neutral-700 mb-1.5">
                   Phone Number *
                 </label>
                 <input
                   type="tel"
+                  id="phone"
                   placeholder="+20 10 1234 5678"
                   {...register('phone')}
+                  aria-describedby={errors.phone ? 'phone-error' : undefined}
                   className={`w-full px-4 py-3 text-sm bg-neutral-50 border rounded-[8px] focus:outline-none transition-colors ${errors.phone ? 'border-red-400 bg-red-50/20' : 'border-neutral-200 focus:border-neutral-800'
                     }`}
                 />
                 {errors.phone && (
-                  <p className="text-xs text-red-500 mt-1 flex items-center gap-1">
+                  <p id="phone-error" role="alert" className="text-xs text-red-500 mt-1 flex items-center gap-1">
                     <AlertCircle className="w-3.5 h-3.5" />
                     <span>{errors.phone.message}</span>
                   </p>
@@ -496,7 +516,7 @@ export default function Checkout() {
 
             {/* Governorate Select Field */}
             <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-neutral-700 mb-1.5">
+              <label htmlFor="shipping_code" className="block text-xs font-semibold uppercase tracking-wider text-neutral-700 mb-1.5">
                 Governorate *
               </label>
               {ratesLoading && (
@@ -521,8 +541,10 @@ export default function Checkout() {
                 </p>
               )}
               <select
+                id="shipping_code"
                 {...register('shipping_code')}
                 disabled={ratesUnusable}
+                aria-describedby={errors.shipping_code ? 'shipping_code-error' : undefined}
                 className={`w-full px-4 py-3 text-sm bg-neutral-50 border rounded-[8px] focus:outline-none transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${errors.shipping_code ? 'border-red-400 bg-red-50/20' : 'border-neutral-200 focus:border-neutral-800'
                   }`}
               >
@@ -534,7 +556,7 @@ export default function Checkout() {
                 ))}
               </select>
               {errors.shipping_code && (
-                <p className="text-xs text-red-500 mt-1 flex items-center gap-1">
+                <p id="shipping_code-error" role="alert" className="text-xs text-red-500 mt-1 flex items-center gap-1">
                   <AlertCircle className="w-3.5 h-3.5" />
                   <span>{errors.shipping_code.message}</span>
                 </p>
@@ -549,18 +571,20 @@ export default function Checkout() {
 
             {/* Address Input Field */}
             <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-neutral-700 mb-1.5">
+              <label htmlFor="address" className="block text-xs font-semibold uppercase tracking-wider text-neutral-700 mb-1.5">
                 Delivery Address *
               </label>
               <textarea
+                id="address"
                 rows={3}
                 placeholder="Apartment/Suite, Street Address, City, State/Province, Postal Code"
                 {...register('address')}
+                aria-describedby={errors.address ? 'address-error' : undefined}
                 className={`w-full px-4 py-3 text-sm bg-neutral-50 border rounded-[8px] focus:outline-none transition-colors ${errors.address ? 'border-red-400 bg-red-50/20' : 'border-neutral-200 focus:border-neutral-800'
                   }`}
               />
               {errors.address && (
-                <p className="text-xs text-red-500 mt-1 flex items-center gap-1">
+                <p id="address-error" role="alert" className="text-xs text-red-500 mt-1 flex items-center gap-1">
                   <AlertCircle className="w-3.5 h-3.5" />
                   <span>{errors.address.message}</span>
                 </p>
@@ -633,7 +657,7 @@ export default function Checkout() {
 
             {/* File upload input (image only) */}
             <div className="space-y-3">
-              <label className="block text-xs font-semibold uppercase tracking-wider text-neutral-700">
+              <label htmlFor="screenshot-upload" className="block text-xs font-semibold uppercase tracking-wider text-neutral-700">
                 Upload Payment Screenshot (Image Only) *
               </label>
 
@@ -686,7 +710,7 @@ export default function Checkout() {
               </div>
 
               {uploadError && (
-                <div className="p-3 bg-red-50 border border-red-200 text-red-600 text-xs rounded-[8px] flex items-center gap-2">
+                <div role="alert" className="p-3 bg-red-50 border border-red-200 text-red-600 text-xs rounded-[8px] flex items-center gap-2">
                   <AlertCircle className="w-4 h-4 shrink-0" />
                   <span>{uploadError}</span>
                 </div>
@@ -706,9 +730,8 @@ export default function Checkout() {
               </button>
 
               <button
-                type="button"
+                type="submit"
                 disabled={isSubmitting || ratesUnusable}
-                onClick={handleSubmit(onFinalSubmit, onInvalid)}
                 className="bg-[#1A1A1A] hover:bg-neutral-800 text-white px-8 py-4 rounded-[8px] text-xs font-semibold uppercase tracking-widest flex items-center space-x-2 transition-all shadow-md active:scale-[0.99] disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {isSubmitting ? (
@@ -744,7 +767,7 @@ export default function Checkout() {
           </div>
         )}
 
-      </div>
+      </form>
 
     </div>
   );
